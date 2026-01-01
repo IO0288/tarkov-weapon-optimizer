@@ -2,6 +2,9 @@
 Streamlit Web UI for Tarkov Weapon Mod Optimizer
 """
 
+import json
+from datetime import datetime
+
 import altair as alt
 import pandas as pd
 import plotly.graph_objects as go
@@ -27,14 +30,33 @@ st.set_page_config(
 # Cached data loading functions
 @st.cache_data(show_spinner=False)
 def load_data():
-    """Fetch all guns and mods from API (cached)."""
-    return fetch_all_data()
+    """Fetch all guns and mods from API (cached). Saves to debug file."""
+    guns, mods = fetch_all_data()
+
+    # Save to debug file
+    debug_data = {
+        "fetched_at": datetime.now().isoformat(),
+        "guns_count": len(guns),
+        "mods_count": len(mods),
+        "guns": guns,
+        "mods": mods,
+    }
+    with open("api_cache_debug.json", "w", encoding="utf-8") as f:
+        json.dump(debug_data, f, indent=2, ensure_ascii=False)
+
+    return guns, mods
 
 
 @st.cache_data(show_spinner=False)
 def build_lookup(_guns, _mods):
     """Build item lookup dictionary (cached)."""
     return build_item_lookup(_guns, _mods)
+
+
+@st.cache_data(show_spinner=False)
+def get_compat_map(weapon_id, _item_lookup):
+    """Build compatibility map for a weapon (cached per weapon_id)."""
+    return build_compatibility_map(weapon_id, _item_lookup)
 
 
 def get_image_url(item_data, prefer_high_res=False, prefer_icon=False):
@@ -281,8 +303,139 @@ def display_optimization_results(result, item_lookup, weapon_stats, presets, sel
                 st.write(f"**Min Ergonomics Constraint:** {constraints['min_ergonomics']}")
             if constraints.get("max_recoil_v"):
                 st.write(f"**Max Recoil V Constraint:** {constraints['max_recoil_v']}")
+            trader_lvls = constraints.get("trader_levels", {})
+            flea = constraints.get("flea_available", True)
+            if trader_lvls:
+                levels_str = ", ".join([f"{k.capitalize()}: LL{v}" for k, v in trader_lvls.items()])
+                st.write(f"**Trader Levels:** {levels_str}")
+            st.write(f"**Flea Market:** {'Available' if flea else 'Not Available'}")
 
     return True
+
+
+def generate_build_export(result, item_lookup, weapon_stats, presets, selected_gun, constraints=None):
+    """Generate exportable build data in JSON and Markdown formats."""
+    selected_items = result["selected_items"]
+    selected_preset = result.get("selected_preset")
+    final_stats = calculate_total_stats(weapon_stats, selected_items, item_lookup)
+
+    # Calculate total cost
+    total_cost = final_stats['total_price']
+    weapon_base_price = weapon_stats.get("price", 0)
+    preset_info = None
+
+    if selected_preset:
+        preset_info = next((p for p in presets if p.get("id") == selected_preset), None)
+        if preset_info:
+            preset_items = set(preset_info.get("items", []))
+            individual_cost = sum([
+                item_lookup[item_id]["stats"].get("price", 0)
+                for item_id in selected_items
+                if item_id not in preset_items and item_id in item_lookup
+            ])
+            total_cost = preset_info.get("price", 0) + individual_cost
+    else:
+        total_cost = weapon_base_price + final_stats['total_price']
+
+    # Build JSON export
+    json_data = {
+        "exported_at": datetime.now().isoformat(),
+        "weapon": {
+            "id": selected_gun["id"],
+            "name": selected_gun["name"],
+            "base_price": weapon_base_price,
+        },
+        "preset": {
+            "id": preset_info["id"] if preset_info else None,
+            "name": preset_info["name"] if preset_info else None,
+            "price": preset_info["price"] if preset_info else None,
+        } if selected_preset else None,
+        "mods": [
+            {
+                "id": item_id,
+                "name": item_lookup[item_id]["data"]["name"],
+                "ergonomics": item_lookup[item_id]["stats"].get("ergonomics", 0),
+                "recoil_modifier": item_lookup[item_id]["stats"].get("recoil_modifier", 0),
+                "price": item_lookup[item_id]["stats"].get("price", 0),
+            }
+            for item_id in selected_items
+            if item_id in item_lookup
+        ],
+        "final_stats": {
+            "ergonomics": round(final_stats["ergonomics"], 1),
+            "recoil_vertical": round(final_stats["recoil_vertical"], 1),
+            "recoil_horizontal": round(final_stats["recoil_horizontal"], 1),
+            "recoil_multiplier": round(final_stats["recoil_multiplier"], 4),
+            "total_weight": round(final_stats["total_weight"], 2),
+            "total_cost": total_cost,
+        },
+        "constraints": constraints,
+        "optimization_status": result["status"],
+    }
+
+    # Build Markdown export
+    md_lines = [
+        f"# {selected_gun['name']} Build",
+        f"*Exported: {datetime.now().strftime('%Y-%m-%d %H:%M')}*",
+        "",
+        "## Final Stats",
+        f"| Stat | Value |",
+        f"|------|-------|",
+        f"| Ergonomics | {min(100, max(0, final_stats['ergonomics'])):.0f} |",
+        f"| Recoil V | {final_stats['recoil_vertical']:.1f} |",
+        f"| Recoil H | {final_stats['recoil_horizontal']:.1f} |",
+        f"| Weight | {final_stats['total_weight']:.2f} kg |",
+        f"| Total Cost | ₽{total_cost:,} |",
+        "",
+    ]
+
+    if selected_preset and preset_info:
+        md_lines.extend([
+            "## Base Preset",
+            f"**{preset_info['name']}** - ₽{preset_info['price']:,}",
+            "",
+        ])
+
+    # Additional mods
+    additional_mods = selected_items
+    if preset_info:
+        preset_items = set(preset_info.get("items", []))
+        additional_mods = [m for m in selected_items if m not in preset_items]
+
+    if additional_mods:
+        md_lines.extend([
+            "## Modifications",
+            "| Name | Ergo | Recoil | Price |",
+            "|------|------|--------|-------|",
+        ])
+        for item_id in additional_mods:
+            if item_id in item_lookup:
+                item = item_lookup[item_id]
+                name = item["data"]["name"]
+                ergo = item["stats"].get("ergonomics", 0)
+                recoil = item["stats"].get("recoil_modifier", 0) * 100
+                price = item["stats"].get("price", 0)
+                md_lines.append(f"| {name} | {ergo:+.0f} | {recoil:+.1f}% | ₽{price:,} |")
+        md_lines.append("")
+
+    if constraints:
+        md_lines.extend(["## Constraints Used"])
+        if constraints.get("max_price"):
+            md_lines.append(f"- Budget: ₽{constraints['max_price']:,}")
+        if constraints.get("min_ergonomics"):
+            md_lines.append(f"- Min Ergonomics: {constraints['min_ergonomics']}")
+        if constraints.get("max_recoil_v"):
+            md_lines.append(f"- Max Recoil V: {constraints['max_recoil_v']}")
+        trader_lvls = constraints.get("trader_levels", {})
+        flea = constraints.get("flea_available", True)
+        if trader_lvls:
+            for trader, level in trader_lvls.items():
+                md_lines.append(f"- {trader.capitalize()}: LL{level}")
+        md_lines.append(f"- Flea Market: {'Yes' if flea else 'No'}")
+
+    markdown_text = "\n".join(md_lines)
+
+    return json_data, markdown_text
 
 
 def main():
@@ -290,16 +443,18 @@ def main():
     st.title("🔫 Tarkov Weapon Mod Optimizer")
     st.markdown("Optimize your weapon builds using constraint programming")
 
-    # Load data with spinner
-    with st.spinner("Loading weapon and mod data from Tarkov.dev API..."):
+    # Load data with status indicator
+    with st.status("Loading data...", expanded=False) as status:
         try:
+            status.update(label="Fetching weapons and mods from API...")
             guns, mods = load_data()
+            status.update(label="Building item lookup...")
             item_lookup = build_lookup(guns, mods)
+            status.update(label=f"Loaded {len(guns)} guns and {len(mods)} mods", state="complete")
         except Exception as e:
+            status.update(label="Failed to load data", state="error")
             st.error(f"Failed to load data from API: {e}")
             st.stop()
-
-    st.success(f"Loaded {len(guns)} guns and {len(mods)} mods")
 
     # Sidebar: Weapon Selection only
     st.sidebar.header("🔫 Select Weapon")
@@ -340,6 +495,69 @@ def main():
                 st.markdown(f"  - Price: ₽{preset_price:,}")
                 st.markdown(f"  - Items: {len(preset_items)}")
                 st.markdown("---")
+
+    # Trader Level Settings
+    st.sidebar.markdown("---")
+    st.sidebar.header("🏪 Trader Access")
+
+    flea_available = st.sidebar.checkbox(
+        "Flea Market Access",
+        value=True,
+        help="Enable if you have access to the Flea Market (requires player level 15).",
+    )
+
+    # Define traders with display names (only those who sell weapon mods)
+    traders = [
+        ("prapor", "Prapor"),
+        ("skier", "Skier"),
+        ("peacekeeper", "Peacekeeper"),
+        ("mechanic", "Mechanic"),
+        ("jaeger", "Jaeger"),
+    ]
+
+    # Initialize trader levels from session state
+    for trader_key, _ in traders:
+        session_key = f"trader_{trader_key}"
+        if session_key not in st.session_state:
+            st.session_state[session_key] = 4
+
+    # Build trader_levels dict from session state (always available)
+    trader_levels = {key: st.session_state[f"trader_{key}"] for key, _ in traders}
+
+    # Individual trader levels in an expander
+    with st.sidebar.expander("Trader Levels", expanded=False):
+        # Quick preset buttons
+        preset_col1, preset_col2 = st.columns(2)
+        if preset_col1.button("All LL1", key="traders_ll1", use_container_width=True):
+            for trader_key, _ in traders:
+                st.session_state[f"trader_{trader_key}"] = 1
+            st.rerun()
+        if preset_col2.button("All LL4", key="traders_ll4", use_container_width=True):
+            for trader_key, _ in traders:
+                st.session_state[f"trader_{trader_key}"] = 4
+            st.rerun()
+
+        st.markdown("---")
+
+        # Individual trader sliders
+        for trader_key, trader_name in traders:
+            session_key = f"trader_{trader_key}"
+            trader_levels[trader_key] = st.select_slider(
+                trader_name,
+                options=[1, 2, 3, 4],
+                value=st.session_state[session_key],
+                key=session_key,
+            )
+
+    # Show summary of non-maxed traders
+    non_maxed = [name for key, name in traders if trader_levels.get(key, 4) < 4]
+    if non_maxed or not flea_available:
+        constraints_info = []
+        if non_maxed:
+            constraints_info.append(f"{len(non_maxed)} traders below LL4")
+        if not flea_available:
+            constraints_info.append("no flea")
+        st.sidebar.caption(f"⚠️ Limited: {', '.join(constraints_info)}")
 
     # Create tabs for Explore and Optimize
     tab_explore, tab_optimize = st.tabs(["📊 Explore Trade-offs", "🚀 Optimize Build"])
@@ -392,21 +610,25 @@ def main():
         explore_button = st.button("📊 Explore Trade-offs", type="primary", key="explore_btn")
 
         if explore_button:
-            # Build compatibility map
-            with st.spinner("Building compatibility map..."):
+            with st.status("Exploring trade-offs...", expanded=True) as status:
+                # Build compatibility map (cached per weapon)
                 try:
-                    compat_map = build_compatibility_map(weapon_id, item_lookup)
+                    status.update(label="Building compatibility map...")
+                    compat_map = get_compat_map(weapon_id, item_lookup)
+                    st.write(f"✓ Found {len(compat_map['reachable_items'])} compatible mods")
                 except Exception as e:
+                    status.update(label="Failed", state="error")
                     st.error(f"Failed to build compatibility map: {e}")
                     st.stop()
 
-            with st.spinner("Exploring trade-off curve (this may take a moment)..."):
                 try:
                     ignore_map = {
                         "Ergo vs Recoil (ignore price)": "price",
                         "Ergo vs Price (ignore recoil)": "recoil",
                         "Recoil vs Price (ignore ergo)": "ergo",
                     }
+                    status.update(label="Running optimization passes...")
+                    st.write("✓ Sampling Pareto frontier (8 points)...")
                     frontier = explore_pareto(
                         weapon_id,
                         item_lookup,
@@ -416,8 +638,12 @@ def main():
                         min_ergonomics=exp_min_ergo,
                         max_recoil_v=exp_max_recoil,
                         steps=8,
+                        trader_levels=trader_levels,
+                        flea_available=flea_available,
                     )
+                    status.update(label="Exploration complete", state="complete")
                 except Exception as e:
+                    status.update(label="Exploration failed", state="error")
                     st.error(f"Exploration failed: {e}")
                     st.stop()
 
@@ -462,22 +688,30 @@ def main():
                 ).properties(height=300)
                 st.altair_chart(chart, width="stretch")
 
-                # Display as table
-                # Table header
-                cols = st.columns([1, 1.5, 1.5, 1.5, 2])
-                cols[0].markdown("**Ergo**")
-                cols[1].markdown("**Recoil %**")
-                cols[2].markdown("**Recoil V**")
-                cols[3].markdown("**Recoil H**")
-                cols[4].markdown("**Price**")
+                # Display as sortable table
+                frontier_df = pd.DataFrame([
+                    {
+                        "Ergo": point["ergo"],
+                        "Recoil %": f"{point['recoil_pct']:+.1f}%",
+                        "Recoil V": round(point["recoil_v"], 1),
+                        "Recoil H": round(point["recoil_h"], 1),
+                        "Price": point["price"],
+                    }
+                    for point in frontier
+                ])
 
-                for point in frontier:
-                    cols = st.columns([1, 1.5, 1.5, 1.5, 2])
-                    cols[0].write(f"{point['ergo']}")
-                    cols[1].write(f"{point['recoil_pct']:+.1f}%")
-                    cols[2].write(f"{point['recoil_v']:.1f}")
-                    cols[3].write(f"{point['recoil_h']:.1f}")
-                    cols[4].write(f"₽{point['price']:,}")
+                st.dataframe(
+                    frontier_df,
+                    column_config={
+                        "Ergo": st.column_config.NumberColumn("Ergo", format="%d"),
+                        "Recoil %": st.column_config.TextColumn("Recoil %"),
+                        "Recoil V": st.column_config.NumberColumn("Recoil V", format="%.1f"),
+                        "Recoil H": st.column_config.NumberColumn("Recoil H", format="%.1f"),
+                        "Price": st.column_config.NumberColumn("Price", format="₽%,d"),
+                    },
+                    hide_index=True,
+                    width="stretch",
+                )
 
                 st.caption(tip)
 
@@ -663,19 +897,21 @@ def main():
         optimize_button = st.button("🚀 Optimize Build", type="primary", key="optimize_btn", width="stretch")
 
         if optimize_button:
-            # Build compatibility map
-            with st.spinner("Building compatibility map..."):
+            with st.status("Optimizing build...", expanded=True) as status:
+                # Build compatibility map (cached per weapon)
                 try:
-                    compat_map = build_compatibility_map(weapon_id, item_lookup)
+                    status.update(label="Building compatibility map...")
+                    compat_map = get_compat_map(weapon_id, item_lookup)
+                    st.write(f"✓ Found {len(compat_map['reachable_items'])} compatible mods")
                 except Exception as e:
+                    status.update(label="Failed", state="error")
                     st.error(f"Failed to build compatibility map: {e}")
                     st.stop()
 
-            st.info(f"Found {len(compat_map['reachable_items'])} compatible mods")
-
-            # Run optimization
-            with st.spinner("Running optimization (CP-SAT solver)..."):
+                # Run optimization
                 try:
+                    status.update(label="Running CP-SAT solver...")
+                    st.write("✓ Building constraint model...")
                     result = optimize_weapon(
                         weapon_id,
                         item_lookup,
@@ -686,8 +922,15 @@ def main():
                         ergo_weight=ergo_weight,
                         recoil_weight=recoil_weight,
                         price_weight=price_weight,
+                        trader_levels=trader_levels,
+                        flea_available=flea_available,
                     )
+                    if result["status"] == "infeasible":
+                        status.update(label="No solution found", state="error")
+                    else:
+                        status.update(label=f"Optimization {result['status']}", state="complete")
                 except Exception as e:
+                    status.update(label="Optimization failed", state="error")
                     st.error(f"Optimization failed: {e}")
                     st.stop()
 
@@ -696,10 +939,37 @@ def main():
                 "max_price": max_price,
                 "min_ergonomics": min_ergonomics,
                 "max_recoil_v": max_recoil_v,
+                "trader_levels": trader_levels,
+                "flea_available": flea_available,
             }
             display_optimization_results(
                 result, item_lookup, weapon_stats, presets, selected_gun, constraints
             )
+
+            # Export buttons
+            if result["status"] != "infeasible":
+                st.markdown("---")
+                st.subheader("Export Build")
+
+                json_data, markdown_text = generate_build_export(
+                    result, item_lookup, weapon_stats, presets, selected_gun, constraints
+                )
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.download_button(
+                        label="📥 Download JSON",
+                        data=json.dumps(json_data, indent=2),
+                        file_name=f"{selected_gun['name'].replace(' ', '_')}_build.json",
+                        mime="application/json",
+                    )
+                with col2:
+                    st.download_button(
+                        label="📥 Download Markdown",
+                        data=markdown_text,
+                        file_name=f"{selected_gun['name'].replace(' ', '_')}_build.md",
+                        mime="text/markdown",
+                    )
 
         else:
             # Initial state for Optimize tab

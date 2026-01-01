@@ -9,230 +9,81 @@ The optimizer uses weapon defaultPreset as the baseline:
 - UI displays the defaultPreset image and included items
 """
 
+import hashlib
+import json
+import os
+import time
+
 import requests
 from collections import deque
 from ortools.sat.python import cp_model
 
+from queries import GUNS_QUERY, MODS_QUERY
+
 API_URL = "https://api.tarkov.dev/graphql"
+CACHE_DIR = os.path.join(os.path.dirname(__file__), ".cache")
+CACHE_TTL = 3600  # 1 hour in seconds
+CACHE_VERSION = 2  # Increment when data format changes
+
+
+def _get_cache_path(query, variables):
+    """Generate a cache file path based on query hash."""
+    key = hashlib.md5((query + json.dumps(variables or {}, sort_keys=True)).encode()).hexdigest()
+    return os.path.join(CACHE_DIR, f"{key}.json")
+
+
+def _load_cache(cache_path):
+    """Load cached data if it exists, is not expired, and matches current version."""
+    if not os.path.exists(cache_path):
+        return None
+    try:
+        with open(cache_path, "r", encoding="utf-8") as f:
+            cached = json.load(f)
+        # Check version and TTL
+        if cached.get("version") != CACHE_VERSION:
+            return None  # Version mismatch, invalidate cache
+        if time.time() - cached.get("timestamp", 0) < CACHE_TTL:
+            return cached.get("data")
+    except (json.JSONDecodeError, IOError):
+        pass
+    return None
+
+
+def _save_cache(cache_path, data):
+    """Save data to cache with timestamp and version."""
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    with open(cache_path, "w", encoding="utf-8") as f:
+        json.dump({"timestamp": time.time(), "version": CACHE_VERSION, "data": data}, f)
 
 
 def run_query(query, variables=None):
-    """Execute a GraphQL query against the Tarkov API."""
+    """Execute a GraphQL query against the Tarkov API with 1-hour cache."""
+    cache_path = _get_cache_path(query, variables)
+
+    # Try to load from cache
+    cached_data = _load_cache(cache_path)
+    if cached_data is not None:
+        return cached_data
+
+    # Fetch from API
     resp = requests.post(API_URL, json={"query": query, "variables": variables or {}}, timeout=60)
     resp.raise_for_status()
     data = resp.json()
     if "errors" in data:
         raise RuntimeError(data["errors"])
-    return data["data"]
 
-
-# Query to fetch all guns with their slots
-GUNS_QUERY = """
-query AllGuns {
-  itemsByType(type: gun) {
-    id
-    basePrice
-    avg24hPrice
-    buyFor {
-      currency
-      priceRUB
-      source
-      vendor {
-        name
-        normalizedName
-        ... on TraderOffer {
-          minTraderLevel
-          buyLimit
-        }
-        ... on FleaMarket {
-          foundInRaidRequired
-        }
-      }
-    }
-    accuracyModifier
-    conflictingSlotIds
-    ergonomicsModifier
-    recoilModifier
-    name
-    normalizedName
-    shortName
-    weight
-    width
-    height
-    image8xLink
-    image512pxLink
-    imageLink
-    iconLinkFallback
-    iconLink
-    properties {
-      ... on ItemPropertiesWeapon {
-        caliber
-        effectiveDistance
-        fireRate
-        ergonomics
-        defaultErgonomics
-        recoilVertical
-        recoilHorizontal
-        defaultRecoilVertical
-        defaultRecoilHorizontal
-        presets {
-          id
-          name
-          shortName
-          baseImageLink
-          gridImageLinkFallback
-          gridImageLink
-          imageLink
-          image8xLink
-          image512pxLink
-          imageLinkFallback
-          inspectImageLink
-          containsItems {
-            item {
-              id
-            }
-          }
-          buyFor {
-            source
-            vendor {
-              name
-              normalizedName
-              ... on TraderOffer {
-                minTraderLevel
-                buyLimit
-              }
-              ... on FleaMarket {
-                foundInRaidRequired
-                enabled
-              }
-            }
-            priceRUB
-            price
-          }
-        }
-        slots {
-          id
-          name
-          nameId
-          required
-          filters {
-            allowedItems {
-              id
-            }
-          }
-        }
-        defaultPreset {
-          baseImageLink
-          gridImageLinkFallback
-          gridImageLink
-          iconLinkFallback
-          iconLink
-          image512pxLink
-          image8xLink
-          imageLink
-          imageLinkFallback
-          inspectImageLink
-        }
-      }
-    }
-  }
-}
-"""
-
-# Query to fetch all mods with their slots (for nested attachments)
-# Note: Properties vary by mod type, so we query multiple fragment types
-MODS_QUERY = """
-query AllMods {
-  itemsByType(type: mods) {
-    id
-    basePrice
-    avg24hPrice
-    buyFor {
-      currency
-      priceRUB
-      source
-      vendor {
-        name
-        normalizedName
-        ... on TraderOffer {
-          minTraderLevel
-          buyLimit
-        }
-        ... on FleaMarket {
-          foundInRaidRequired
-        }
-      }
-    }
-    accuracyModifier
-    ergonomicsModifier
-    recoilModifier
-    name
-    normalizedName
-    shortName
-    weight
-    width
-    height
-    image8xLink
-    image512pxLink
-    imageLink
-    iconLinkFallback
-    iconLink
-    conflictingSlotIds
-    conflictingItems {
-      id
-    }
-    properties {
-      ... on ItemPropertiesWeaponMod {
-        ergonomics
-        recoilModifier
-        slots {
-          id
-          name
-          nameId
-          required
-          filters {
-            allowedItems {
-              id
-            }
-          }
-        }
-      }
-      ... on ItemPropertiesBarrel {
-        ergonomics
-        recoilModifier
-        slots {
-          id
-          name
-          nameId
-          required
-          filters {
-            allowedItems {
-              id
-            }
-          }
-        }
-      }
-      ... on ItemPropertiesMagazine {
-        ergonomics
-        recoilModifier
-      }
-      ... on ItemPropertiesScope {
-        ergonomics
-        recoilModifier
-      }
-    }
-  }
-}
-"""
+    result = data["data"]
+    _save_cache(cache_path, result)
+    return result
 
 
 def fetch_all_data():
-    """Fetch all guns and mods from the API."""
-    print("Fetching guns from API...")
+    """Fetch all guns and mods from the API (cached for 1 hour)."""
+    print("Fetching guns...")
     guns_data = run_query(GUNS_QUERY)
     print(f"  Found {len(guns_data['itemsByType'])} guns")
 
-    print("Fetching mods from API...")
+    print("Fetching mods...")
     mods_data = run_query(MODS_QUERY)
     print(f"  Found {len(mods_data['itemsByType'])} mods")
 
@@ -540,21 +391,43 @@ def extract_mod_stats(mod):
     else:
         recoil_mod = 0
 
-    # Get lowest buyFor price (mods without valid prices are already filtered out)
+    # Extract all buyFor offers with trader level info
     buy_for = mod.get("buyFor", []) or []
+    offers = []
     lowest_price = 0
     price_source = "market"
 
-    if buy_for:
-        # Filter to only valid offers with price > 0
-        valid_offers = [
-            offer for offer in buy_for
-            if isinstance(offer, dict) and (offer.get("priceRUB") or 0) > 0
-        ]
-        if valid_offers:
-            min_offer = min(valid_offers, key=lambda x: x.get("priceRUB", float("inf")))
-            lowest_price = min_offer.get("priceRUB", 0)
-            price_source = min_offer.get("source", "market") or "market"
+    for offer in buy_for:
+        if not isinstance(offer, dict):
+            continue
+        price = offer.get("priceRUB") or 0
+        if price <= 0:
+            continue
+
+        source = offer.get("source", "")
+        vendor = offer.get("vendor", {}) or {}
+
+        # Extract trader level (1-4) or None for flea
+        trader_level = None
+        if source == "fleaMarket":
+            trader_level = None  # Flea market has no level requirement
+        else:
+            trader_level = vendor.get("minTraderLevel") or 1
+
+        offers.append({
+            "price": price,
+            "source": source,
+            "vendor_name": vendor.get("name", ""),
+            "vendor_normalized": vendor.get("normalizedName", ""),
+            "trader_level": trader_level,
+        })
+
+    # Sort offers by price for easy lookup
+    offers.sort(key=lambda x: x["price"])
+
+    if offers:
+        lowest_price = offers[0]["price"]
+        price_source = offers[0]["source"]
 
     return {
         # Flat ergonomics bonus/penalty
@@ -563,7 +436,9 @@ def extract_mod_stats(mod):
         "recoil_modifier": recoil_mod,
         # Accuracy modifier
         "accuracy_modifier": mod.get("accuracyModifier", 0) or 0,
-        # Price for cost optimization (use lowest trader price)
+        # All available offers (sorted by price)
+        "offers": offers,
+        # Default price (lowest available)
         "price": lowest_price,
         # Price source (trader name or "market")
         "price_source": price_source,
@@ -573,6 +448,72 @@ def extract_mod_stats(mod):
         "width": mod.get("width", 0) or 0,
         "height": mod.get("height", 0) or 0,
     }
+
+
+# Default trader levels (all maxed) - only traders who sell weapon mods
+DEFAULT_TRADER_LEVELS = {
+    "prapor": 4,
+    "skier": 4,
+    "peacekeeper": 4,
+    "mechanic": 4,
+    "jaeger": 4,
+}
+
+
+def get_available_price(stats, trader_levels=None, flea_available=True):
+    """Get the best available price for an item given trader levels and flea access.
+
+    Args:
+        stats: Item stats dict containing 'offers' list
+        trader_levels: Dict mapping trader name (normalized) to level (1-4).
+                       If None, defaults to all traders at level 4.
+        flea_available: Whether flea market is accessible
+
+    Returns:
+        Tuple of (price, source, is_available)
+        - price: Best available price (0 if unavailable)
+        - source: Where to buy from
+        - is_available: Whether the item can be purchased at all
+    """
+    if trader_levels is None:
+        trader_levels = DEFAULT_TRADER_LEVELS
+
+    offers = stats.get("offers")
+    if not offers:
+        # Fallback for items without offers data (legacy cache or no traders sell it)
+        # Check if there's a default price available
+        default_price = stats.get("price", 0)
+        if default_price > 0 and flea_available:
+            return (default_price, stats.get("price_source", "market"), True)
+        return (0, None, False)
+
+    best_price = None
+    best_source = None
+
+    for offer in offers:
+        price = offer["price"]
+        source = offer["source"]
+        required_level = offer["trader_level"]
+        vendor = offer.get("vendor_normalized", "").lower()
+
+        # Check if this offer is accessible
+        if source == "fleaMarket":
+            if not flea_available:
+                continue
+        else:
+            # Trader offer - check level requirement for this specific trader
+            player_level = trader_levels.get(vendor, 4)  # Default to 4 if unknown trader
+            if required_level is not None and required_level > player_level:
+                continue
+
+        # This offer is accessible
+        if best_price is None or price < best_price:
+            best_price = price
+            best_source = source
+
+    if best_price is not None:
+        return (best_price, best_source, True)
+    return (0, None, False)
 
 
 def build_compatibility_map(weapon_id, item_lookup):
@@ -688,7 +629,9 @@ def explore_pareto(
     max_price=None,
     min_ergonomics=None,
     max_recoil_v=None,
-    steps=10
+    steps=10,
+    trader_levels=None,
+    flea_available=True
 ):
     """
     Explore the Pareto frontier between two dimensions, ignoring the third.
@@ -703,6 +646,8 @@ def explore_pareto(
         min_ergonomics: Optional min ergo constraint (always respected if set)
         max_recoil_v: Optional max recoil constraint (always respected if set)
         steps: Number of points to sample along the frontier
+        trader_levels: Dict mapping trader name to level (1-4). If None, all at LL4.
+        flea_available: Whether flea market is accessible
 
     Returns:
         List of dicts with keys: ergo, recoil_pct, recoil_v, recoil_h, price, ...
@@ -711,6 +656,9 @@ def explore_pareto(
     naked_recoil_v = weapon_stats.get("naked_recoil_v", 100)
 
     frontier = []
+
+    # Common kwargs for trader level constraints
+    trader_kwargs = {"trader_levels": trader_levels, "flea_available": flea_available}
 
     # Weight presets for single-objective optimization
     RECOIL_WEIGHTS = {"ergo_weight": 0, "recoil_weight": 1, "price_weight": 0}
@@ -723,12 +671,12 @@ def explore_pareto(
         result_low = optimize_weapon(
             weapon_id, item_lookup, compatibility_map,
             max_price=max_price, max_recoil_v=max_recoil_v,
-            **RECOIL_WEIGHTS
+            **RECOIL_WEIGHTS, **trader_kwargs
         )
         result_high = optimize_weapon(
             weapon_id, item_lookup, compatibility_map,
             max_price=max_price, max_recoil_v=max_recoil_v,
-            **ERGO_WEIGHTS
+            **ERGO_WEIGHTS, **trader_kwargs
         )
 
         if result_low["status"] == "infeasible":
@@ -760,7 +708,7 @@ def explore_pareto(
             result = optimize_weapon(
                 weapon_id, item_lookup, compatibility_map,
                 max_price=max_price, min_ergonomics=target, max_recoil_v=max_recoil_v,
-                **RECOIL_WEIGHTS
+                **RECOIL_WEIGHTS, **trader_kwargs
             )
             if result["status"] != "infeasible":
                 stats = calculate_total_stats(weapon_stats, result["selected_items"], item_lookup)
@@ -772,12 +720,12 @@ def explore_pareto(
         result_low = optimize_weapon(
             weapon_id, item_lookup, compatibility_map,
             max_price=max_price, max_recoil_v=max_recoil_v,
-            **PRICE_WEIGHTS
+            **PRICE_WEIGHTS, **trader_kwargs
         )
         result_high = optimize_weapon(
             weapon_id, item_lookup, compatibility_map,
             max_price=max_price, max_recoil_v=max_recoil_v,
-            **ERGO_WEIGHTS
+            **ERGO_WEIGHTS, **trader_kwargs
         )
 
         if result_low["status"] == "infeasible":
@@ -809,7 +757,7 @@ def explore_pareto(
             result = optimize_weapon(
                 weapon_id, item_lookup, compatibility_map,
                 max_price=max_price, min_ergonomics=target, max_recoil_v=max_recoil_v,
-                **PRICE_WEIGHTS
+                **PRICE_WEIGHTS, **trader_kwargs
             )
             if result["status"] != "infeasible":
                 stats = calculate_total_stats(weapon_stats, result["selected_items"], item_lookup)
@@ -821,12 +769,12 @@ def explore_pareto(
         result_low = optimize_weapon(
             weapon_id, item_lookup, compatibility_map,
             max_price=max_price, min_ergonomics=min_ergonomics,
-            **RECOIL_WEIGHTS
+            **RECOIL_WEIGHTS, **trader_kwargs
         )
         result_high = optimize_weapon(
             weapon_id, item_lookup, compatibility_map,
             max_price=max_price, min_ergonomics=min_ergonomics,
-            **PRICE_WEIGHTS
+            **PRICE_WEIGHTS, **trader_kwargs
         )
 
         if result_low["status"] == "infeasible":
@@ -855,7 +803,7 @@ def explore_pareto(
             result = optimize_weapon(
                 weapon_id, item_lookup, compatibility_map,
                 max_price=max_price, min_ergonomics=min_ergonomics, max_recoil_v=target,
-                **PRICE_WEIGHTS
+                **PRICE_WEIGHTS, **trader_kwargs
             )
             if result["status"] != "infeasible":
                 stats = calculate_total_stats(weapon_stats, result["selected_items"], item_lookup)
@@ -890,7 +838,8 @@ def _build_frontier_point(stats, result):
 def optimize_weapon(
     weapon_id, item_lookup, compatibility_map,
     max_price=None, min_ergonomics=None, max_recoil_v=None,
-    ergo_weight=1.0, recoil_weight=1.0, price_weight=0.0
+    ergo_weight=1.0, recoil_weight=1.0, price_weight=0.0,
+    trader_levels=None, flea_available=True
 ):
     """
     Use CP-SAT solver to find optimal mod configuration.
@@ -902,24 +851,43 @@ def optimize_weapon(
         ergo_weight: Weight for ergonomics in objective (higher = prioritize ergo)
         recoil_weight: Weight for recoil reduction in objective (higher = prioritize low recoil)
         price_weight: Weight for price in objective (higher = prioritize low cost)
+        trader_levels: Dict mapping trader name to level (1-4). If None, all traders at LL4.
+                       Example: {"prapor": 3, "mechanic": 4, "skier": 2, ...}
+        flea_available: Whether flea market is accessible (requires player level 15)
 
     Constraints:
     - Mutex: At most one item per slot
     - Dependency: Child item requires parent item
     - Conflicts: Items with conflictingItems can't both be selected
     - Required: API-marked required slots must have exactly one item
+    - Availability: Items must be purchasable at given trader levels or from flea
     """
+    if trader_levels is None:
+        trader_levels = DEFAULT_TRADER_LEVELS
+
     weapon = item_lookup[weapon_id]
 
     reachable = compatibility_map["reachable_items"]
     slot_items = compatibility_map["slot_items"]
     slot_owner = compatibility_map["slot_owner"]
 
+    # Filter reachable items by availability at given trader levels
+    available_items = {}
+    item_prices = {}  # item_id -> (price, source) at current trader levels
+    for item_id in reachable:
+        if item_id not in item_lookup:
+            continue
+        stats = item_lookup[item_id]["stats"]
+        price, source, is_available = get_available_price(stats, trader_levels, flea_available)
+        if is_available:
+            available_items[item_id] = reachable[item_id]
+            item_prices[item_id] = (price, source)
+
     model = cp_model.CpModel()
 
-    # Create boolean variables for each reachable item
+    # Create boolean variables for each available item (filtered by trader level)
     item_vars = {}
-    for item_id in reachable:
+    for item_id in available_items:
         item_vars[item_id] = model.NewBoolVar(f"item_{item_id}")
 
     # Create boolean variables for each preset
@@ -956,6 +924,8 @@ def optimize_weapon(
     # For each item with parent dependencies, add constraint: item <= sum(parents)
     # This means: if item is selected, at least one parent must be selected
     for item_id, parents in item_parents.items():
+        if item_id not in item_vars:
+            continue
         parent_vars = [item_vars[p] for p in parents if p in item_vars]
         if parent_vars:
             # item can only be selected if at least one parent is selected
@@ -963,8 +933,8 @@ def optimize_weapon(
 
     # Constraint 3: Conflicting items - can't select both
     conflict_pairs_added = set()
-    for item_id in reachable:
-        if item_id not in item_lookup:
+    for item_id in available_items:
+        if item_id not in item_lookup or item_id not in item_vars:
             continue
         item_data = item_lookup[item_id]
         conflicting = item_data.get("conflicting_items", [])
@@ -1037,9 +1007,11 @@ def optimize_weapon(
                 price_terms.append(preset_price * preset_vars[preset_id])
 
         # Add individual mod prices (only if not covered by a selected preset)
-        for item_id in reachable:
-            stats = item_lookup[item_id]["stats"]
-            item_price = int(stats.get("price", 0))
+        # Use trader-level-aware prices from item_prices
+        for item_id in available_items:
+            if item_id not in item_vars:
+                continue
+            item_price = int(item_prices.get(item_id, (0, None))[0])
 
             containing_presets = item_to_presets.get(item_id, [])
             if not containing_presets:
@@ -1087,7 +1059,9 @@ def optimize_weapon(
 
     # === ERGONOMICS VARIABLE ===
     ergo_terms = []
-    for item_id in reachable:
+    for item_id in available_items:
+        if item_id not in item_vars:
+            continue
         stats = item_lookup[item_id]["stats"]
         ergo = int(stats.get("ergonomics", 0))
         ergo_terms.append(ergo * item_vars[item_id])
@@ -1104,7 +1078,9 @@ def optimize_weapon(
 
     # === RECOIL VARIABLE ===
     recoil_terms = []
-    for item_id in reachable:
+    for item_id in available_items:
+        if item_id not in item_vars:
+            continue
         stats = item_lookup[item_id]["stats"]
         # Recoil modifier as integer (e.g., -0.05 -> -50)
         recoil = int(stats.get("recoil_modifier", 0) * SCALE)
@@ -1159,10 +1135,11 @@ def optimize_weapon(
                 preset_price = int(preset_info.get("price", 0))
                 objective_terms.append(int(-price_weight * preset_price) * preset_var)
 
-        # Add individual item prices
-        for item_id in reachable:
-            stats = item_lookup[item_id]["stats"]
-            item_price = int(stats.get("price", 0))
+        # Add individual item prices (using trader-level-aware prices)
+        for item_id in available_items:
+            if item_id not in item_vars:
+                continue
+            item_price = int(item_prices.get(item_id, (0, None))[0])
             objective_terms.append(int(-price_weight * item_price) * item_vars[item_id])
 
         # Add naked gun price when no preset selected
