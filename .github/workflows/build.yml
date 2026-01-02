@@ -39,6 +39,7 @@ jobs:
             --copy-metadata streamlit `
             --copy-metadata altair `
             --copy-metadata plotly `
+            --collect-all ortools `
             --name tarkov-optimizer `
             app.py
 
@@ -77,6 +78,7 @@ jobs:
             --copy-metadata streamlit \
             --copy-metadata altair \
             --copy-metadata plotly \
+            --collect-all ortools \
             --name tarkov-optimizer \
             app.py
 
@@ -115,6 +117,7 @@ jobs:
             --copy-metadata streamlit \
             --copy-metadata altair \
             --copy-metadata plotly \
+            --collect-all ortools \
             --name tarkov-optimizer \
             app.py
 
