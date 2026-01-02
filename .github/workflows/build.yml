@@ -22,10 +22,14 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
       - name: Install dependencies
         run: |
-          pip install --upgrade pip wheel setuptools
-          pip install -r requirements.txt
+          uv pip install --system nuitka requests ortools streamlit altair pandas plotly
 
       - name: Build Windows Executable
         run: |
@@ -54,10 +58,14 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
       - name: Install dependencies
         run: |
-          pip install --upgrade pip wheel setuptools
-          pip install -r requirements.txt
+          uv pip install --system nuitka requests ortools streamlit altair pandas plotly
 
       - name: Build Linux Executable
         run: |
@@ -86,10 +94,14 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
       - name: Install dependencies
         run: |
-          pip install --upgrade pip wheel setuptools
-          pip install -r requirements.txt
+          uv pip install --system nuitka requests ortools streamlit altair pandas plotly
 
       - name: Build macOS Executable
         run: |
