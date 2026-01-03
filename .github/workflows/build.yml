@@ -3,6 +3,8 @@ name: Build Executables
 on:
   push:
     branches: [main, master]
+    tags:
+      - 'v*'
   workflow_dispatch:
     inputs:
       platform:
