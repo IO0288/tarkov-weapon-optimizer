@@ -12,13 +12,55 @@ The optimizer uses weapon defaultPreset as the baseline:
 import hashlib
 import json
 import os
+import sys
 import time
 
 import requests
 from collections import deque
+from loguru import logger
 from ortools.sat.python import cp_model
 
 from queries import GUNS_QUERY, MODS_QUERY
+
+# Configure loguru
+# Remove default handler and add custom one
+logger.remove()
+_console_handler_id = logger.add(
+    sys.stderr,
+    format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
+    level="INFO",
+)
+
+# Also log to file with rotation (if possible)
+_log_dir = os.path.join(os.path.dirname(__file__), "logs")
+try:
+    os.makedirs(_log_dir, exist_ok=True)
+    logger.add(
+        os.path.join(_log_dir, "tarkov_optimizer_{time}.log"),
+        rotation="10 MB",
+        retention="7 days",
+        level="DEBUG",
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
+    )
+except (OSError, PermissionError):
+    # File logging not available, continue with console only
+    pass
+
+
+def set_log_level(level: str):
+    """Set the console logging level.
+
+    Args:
+        level: Log level string (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+    """
+    global _console_handler_id
+    logger.remove(_console_handler_id)
+    _console_handler_id = logger.add(
+        sys.stderr,
+        format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
+        level=level.upper(),
+    )
+    logger.info(f"Log level set to {level.upper()}")
 
 API_URL = "https://api.tarkov.dev/graphql"
 CACHE_DIR = os.path.join(os.path.dirname(__file__), ".cache")
@@ -35,17 +77,22 @@ def _get_cache_path(query, variables):
 def _load_cache(cache_path):
     """Load cached data if it exists, is not expired, and matches current version."""
     if not os.path.exists(cache_path):
+        logger.debug(f"Cache miss: file does not exist at {cache_path}")
         return None
     try:
         with open(cache_path, "r", encoding="utf-8") as f:
             cached = json.load(f)
         # Check version and TTL
         if cached.get("version") != CACHE_VERSION:
+            logger.debug(f"Cache invalidated: version mismatch (cached={cached.get('version')}, current={CACHE_VERSION})")
             return None  # Version mismatch, invalidate cache
-        if time.time() - cached.get("timestamp", 0) < CACHE_TTL:
+        age = time.time() - cached.get("timestamp", 0)
+        if age < CACHE_TTL:
+            logger.debug(f"Cache hit: loaded data from {cache_path} (age={age:.0f}s)")
             return cached.get("data")
-    except (json.JSONDecodeError, IOError):
-        pass
+        logger.debug(f"Cache expired: age={age:.0f}s > TTL={CACHE_TTL}s")
+    except (json.JSONDecodeError, IOError) as e:
+        logger.warning(f"Cache load error: {e}")
     return None
 
 
@@ -54,10 +101,11 @@ def _save_cache(cache_path, data):
     os.makedirs(CACHE_DIR, exist_ok=True)
     with open(cache_path, "w", encoding="utf-8") as f:
         json.dump({"timestamp": time.time(), "version": CACHE_VERSION, "data": data}, f)
+    logger.debug(f"Cache saved to {cache_path}")
 
 
-def run_query(query, variables=None):
-    """Execute a GraphQL query against the Tarkov API with 1-hour cache."""
+def run_query(query, variables=None, max_retries=3):
+    """Execute a GraphQL query against the Tarkov API with 1-hour cache and retry logic."""
     cache_path = _get_cache_path(query, variables)
 
     # Try to load from cache
@@ -65,27 +113,63 @@ def run_query(query, variables=None):
     if cached_data is not None:
         return cached_data
 
-    # Fetch from API
-    resp = requests.post(API_URL, json={"query": query, "variables": variables or {}}, timeout=60)
-    resp.raise_for_status()
-    data = resp.json()
-    if "errors" in data:
-        raise RuntimeError(data["errors"])
+    # Fetch from API with retry logic
+    logger.info("Fetching data from Tarkov.dev API...")
+    last_error = None
 
-    result = data["data"]
-    _save_cache(cache_path, result)
-    return result
+    for attempt in range(1, max_retries + 1):
+        start_time = time.time()
+        try:
+            resp = requests.post(
+                API_URL,
+                json={"query": query, "variables": variables or {}},
+                timeout=90,
+                headers={"Content-Type": "application/json"},
+            )
+            resp.raise_for_status()
+            elapsed = time.time() - start_time
+            logger.debug(f"API request completed in {elapsed:.2f}s (status={resp.status_code})")
+
+            data = resp.json()
+            if "errors" in data:
+                logger.error(f"GraphQL errors: {data['errors']}")
+                raise RuntimeError(data["errors"])
+
+            result = data["data"]
+            _save_cache(cache_path, result)
+            return result
+
+        except requests.exceptions.ChunkedEncodingError as e:
+            last_error = e
+            logger.warning(f"API request failed (attempt {attempt}/{max_retries}): Response ended prematurely")
+        except requests.exceptions.Timeout as e:
+            last_error = e
+            logger.warning(f"API request timed out (attempt {attempt}/{max_retries})")
+        except requests.exceptions.ConnectionError as e:
+            last_error = e
+            logger.warning(f"API connection error (attempt {attempt}/{max_retries}): {e}")
+        except requests.RequestException as e:
+            last_error = e
+            logger.warning(f"API request failed (attempt {attempt}/{max_retries}): {e}")
+
+        if attempt < max_retries:
+            wait_time = 2 ** attempt  # Exponential backoff: 2, 4, 8 seconds
+            logger.info(f"Retrying in {wait_time}s...")
+            time.sleep(wait_time)
+
+    logger.error(f"API request failed after {max_retries} attempts: {last_error}")
+    raise RuntimeError(f"Failed to fetch data from API after {max_retries} attempts: {last_error}")
 
 
 def fetch_all_data():
     """Fetch all guns and mods from the API (cached for 1 hour)."""
-    print("Fetching guns...")
+    logger.info("Fetching guns...")
     guns_data = run_query(GUNS_QUERY)
-    print(f"  Found {len(guns_data['itemsByType'])} guns")
+    logger.info(f"Found {len(guns_data['itemsByType'])} guns")
 
-    print("Fetching mods...")
+    logger.info("Fetching mods...")
     mods_data = run_query(MODS_QUERY)
-    print(f"  Found {len(mods_data['itemsByType'])} mods")
+    logger.info(f"Found {len(mods_data['itemsByType'])} mods")
 
     return guns_data["itemsByType"], mods_data["itemsByType"]
 
@@ -104,7 +188,9 @@ def build_item_lookup(guns, mods):
 
     Note: Mods without valid market prices are excluded.
     """
+    logger.info("Building item lookup table...")
     lookup = {}
+    skipped_mods = 0
 
     # Add guns
     for gun in guns:
@@ -119,6 +205,7 @@ def build_item_lookup(guns, mods):
     # Add mods (only those with valid prices)
     for mod in mods:
         if not has_valid_price(mod):
+            skipped_mods += 1
             continue  # Skip mods without valid market price
         lookup[mod["id"]] = {
             "type": "mod",
@@ -129,6 +216,8 @@ def build_item_lookup(guns, mods):
             "conflicting_slot_ids": mod.get("conflictingSlotIds", []) or [],
         }
 
+    logger.info(f"Item lookup built: {len(guns)} guns, {len(mods) - skipped_mods} mods (skipped {skipped_mods} mods without valid prices)")
+    logger.debug(f"Total items indexed: {len(lookup)}")
     return lookup
 
 
@@ -562,12 +651,14 @@ def build_compatibility_map(weapon_id, item_lookup):
     Key fix: Each slot has a unique ID per parent item, so we track slot ownership
     to properly handle dependency constraints.
     """
+    logger.debug(f"Building compatibility map for weapon {weapon_id}")
     reachable = {}  # item_id -> {"item": item_data}
     slot_items = {}  # slot_id -> list of item_ids that can go in that slot
     item_to_slots = {}  # item_id -> list of slot_ids it owns
     slot_owner = {}  # slot_id -> item_id that owns this slot (or weapon_id)
 
     if weapon_id not in item_lookup:
+        logger.error(f"Weapon {weapon_id} not found in item lookup")
         raise ValueError(f"Weapon {weapon_id} not found in item lookup")
 
     weapon = item_lookup[weapon_id]
@@ -620,6 +711,7 @@ def build_compatibility_map(weapon_id, item_lookup):
                     if allowed_id not in visited:
                         queue.append((allowed_id, slot_id))
 
+    logger.debug(f"Compatibility map built: {len(reachable)} reachable mods, {len(slot_items)} slots")
     return {
         "reachable_items": reachable,
         "slot_items": slot_items,
@@ -713,6 +805,7 @@ def explore_pareto(
     weapon_stats = item_lookup[weapon_id]["stats"]
     naked_recoil_v = weapon_stats.get("naked_recoil_v", 100)
 
+    logger.info(f"Exploring Pareto frontier (ignore={ignore}, steps={steps})")
     frontier = []
 
     # Common kwargs for all constraints
@@ -887,6 +980,7 @@ def explore_pareto(
             seen.add(key)
             unique_frontier.append(point)
 
+    logger.info(f"Pareto frontier exploration complete: {len(unique_frontier)} unique points")
     return unique_frontier
 
 
@@ -1031,6 +1125,15 @@ def optimize_weapon(
         trader_levels = DEFAULT_TRADER_LEVELS
 
     weapon = item_lookup[weapon_id]
+    weapon_name = weapon["data"].get("name", weapon_id)
+    logger.info(f"Starting optimization for {weapon_name}")
+    logger.debug(f"Weights: ergo={ergo_weight}, recoil={recoil_weight}, price={price_weight}")
+    if max_price:
+        logger.debug(f"Budget constraint: max_price={max_price}")
+    if min_ergonomics:
+        logger.debug(f"Ergo constraint: min_ergonomics={min_ergonomics}")
+    if max_recoil_v:
+        logger.debug(f"Recoil constraint: max_recoil_v={max_recoil_v}")
 
     # Check constraints feasibility before running solver
     feasibility_reasons = _check_constraints_feasibility(
@@ -1041,6 +1144,7 @@ def optimize_weapon(
         trader_levels, flea_available
     )
     if feasibility_reasons is not None:
+        logger.warning(f"Optimization infeasible: {'; '.join(feasibility_reasons)}")
         return {
             "status": "infeasible",
             "reason": "; ".join(feasibility_reasons),
@@ -1607,9 +1711,15 @@ def optimize_weapon(
     model.Maximize(sum(objective_terms))
 
     # Solve
+    logger.debug(f"Model built with {len(item_vars)} item variables, {len(preset_vars)} preset variables")
+    logger.info("Running CP-SAT solver...")
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = 120.0
+
+    start_time = time.time()
     status = solver.Solve(model)
+    solve_time = time.time() - start_time
+    logger.debug(f"Solver finished in {solve_time:.2f}s")
 
     if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
         selected = []
@@ -1624,8 +1734,12 @@ def optimize_weapon(
                 selected_preset = preset_id
                 break
 
+        status_str = "optimal" if status == cp_model.OPTIMAL else "feasible"
+        logger.info(f"Optimization {status_str}: selected {len(selected)} mods, objective={solver.ObjectiveValue():.0f}")
+        if selected_preset:
+            logger.debug(f"Selected preset: {selected_preset}")
         return {
-            "status": "optimal" if status == cp_model.OPTIMAL else "feasible",
+            "status": status_str,
             "selected_items": selected,
             "selected_preset": selected_preset,
             "objective_value": solver.ObjectiveValue(),
@@ -1637,6 +1751,7 @@ def optimize_weapon(
             reason += f" (cannot achieve {min_ergonomics} ergonomics)"
         if max_recoil_sum is not None:
             reason += f" (cannot reduce recoil to {max_recoil_sum})"
+        logger.warning(f"Optimization failed: {reason}")
         return {
             "status": "infeasible",
             "reason": reason,
@@ -1708,45 +1823,39 @@ def print_build(weapon_id, selected_items, item_lookup, weapon_stats):
 def main():
     """Main function to run the optimizer."""
     # Step 1: Fetch all data
-    print("=" * 60)
-    print("TARKOV WEAPON MOD OPTIMIZER")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("TARKOV WEAPON MOD OPTIMIZER")
+    logger.info("=" * 60)
 
     guns, mods = fetch_all_data()
 
     # Step 2: Build item lookup dictionary
-    print("\nBuilding item lookup table...")
     item_lookup = build_item_lookup(guns, mods)
-    print(f"  Total items indexed: {len(item_lookup)}")
 
     # Step 3: Select the first gun for testing
     test_gun = guns[0]
     weapon_id = test_gun["id"]
-    print(f"\nTest weapon: {test_gun['name']}")
-    print(f"  ID: {weapon_id}")
+    logger.info(f"Test weapon: {test_gun['name']} (ID: {weapon_id})")
 
     # Step 4: Build compatibility map via BFS
-    print("\nBuilding compatibility map (BFS)...")
     compat_map = build_compatibility_map(weapon_id, item_lookup)
-    print(f"  Reachable mods: {len(compat_map['reachable_items'])}")
-    print(f"  Total slots found: {len(compat_map['slot_items'])}")
 
     # Show weapon's slots
     weapon = item_lookup[weapon_id]
-    print("\nWeapon slots:")
+    logger.debug("Weapon slots:")
     for slot in weapon["slots"]:
         slot_id = slot["id"]
         num_options = len(compat_map["slot_items"].get(slot_id, []))
         required = "REQUIRED" if slot.get("required") else "optional"
-        print(f"  - {slot['nameId']}: {num_options} options ({required})")
+        logger.debug(f"  - {slot['nameId']}: {num_options} options ({required})")
 
     # Step 5: Run optimization
-    print("\n" + "=" * 60)
-    print("RUNNING OPTIMIZATION...")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("RUNNING OPTIMIZATION...")
+    logger.info("=" * 60)
 
     # Optimize for lowest recoil (no constraints)
-    print("\n>>> Optimizing for LOWEST RECOIL <<<")
+    logger.info(">>> Optimizing for LOWEST RECOIL <<<")
     result = optimize_weapon(
         weapon_id,
         item_lookup,
@@ -1754,14 +1863,11 @@ def main():
         ergo_weight=0, recoil_weight=1, price_weight=0,
     )
 
-    print(f"Optimization status: {result['status']}")
-    print(f"Selected {len(result['selected_items'])} mods")
-
     if result["selected_items"]:
         print_build(weapon_id, result["selected_items"], item_lookup, weapon["stats"])
 
     # Optimize for highest ergonomics
-    print("\n\n>>> Optimizing for HIGHEST ERGONOMICS <<<")
+    logger.info(">>> Optimizing for HIGHEST ERGONOMICS <<<")
     result_ergo = optimize_weapon(
         weapon_id,
         item_lookup,
@@ -1769,14 +1875,11 @@ def main():
         ergo_weight=1, recoil_weight=0, price_weight=0,
     )
 
-    print(f"Optimization status: {result_ergo['status']}")
-    print(f"Selected {len(result_ergo['selected_items'])} mods")
-
     if result_ergo["selected_items"]:
         print_build(weapon_id, result_ergo["selected_items"], item_lookup, weapon["stats"])
 
     # Lowest recoil with minimum ergonomics constraint
-    print("\n\n>>> Optimizing for LOWEST RECOIL with MIN ERGO=50 <<<")
+    logger.info(">>> Optimizing for LOWEST RECOIL with MIN ERGO=50 <<<")
     result_balanced = optimize_weapon(
         weapon_id,
         item_lookup,
@@ -1785,14 +1888,11 @@ def main():
         min_ergonomics=50,
     )
 
-    print(f"Optimization status: {result_balanced['status']}")
-    print(f"Selected {len(result_balanced['selected_items'])} mods")
-
     if result_balanced["selected_items"]:
         print_build(weapon_id, result_balanced["selected_items"], item_lookup, weapon["stats"])
 
     # Budget build
-    print("\n\n>>> Optimizing for BUDGET BUILD (max 300,000 roubles) <<<")
+    logger.info(">>> Optimizing for BUDGET BUILD (max 300,000 roubles) <<<")
     result_budget = optimize_weapon(
         weapon_id,
         item_lookup,
@@ -1800,9 +1900,6 @@ def main():
         ergo_weight=0, recoil_weight=1, price_weight=0,
         max_price=300000,
     )
-
-    print(f"Optimization status: {result_budget['status']}")
-    print(f"Selected {len(result_budget['selected_items'])} mods")
 
     if result_budget["selected_items"]:
         print_build(weapon_id, result_budget["selected_items"], item_lookup, weapon["stats"])

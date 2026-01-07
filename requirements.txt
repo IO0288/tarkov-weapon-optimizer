@@ -4,4 +4,4 @@ streamlit
 plotly
 pandas
 altair
-nuitka
+loguru

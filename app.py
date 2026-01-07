@@ -11,6 +11,7 @@ import altair as alt
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from loguru import logger
 from weapon_optimizer import (
     fetch_all_data,
     build_item_lookup,
@@ -18,8 +19,33 @@ from weapon_optimizer import (
     optimize_weapon,
     calculate_total_stats,
     explore_pareto,
+    set_log_level,
 )
 from i18n import t, language_selector, get_language
+
+# Configure loguru for Streamlit (reduce noise for UI)
+logger.remove()
+logger.add(
+    sys.stderr,
+    format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>",
+    level="INFO",
+    filter=lambda record: record["level"].name != "DEBUG",  # Filter out DEBUG in Streamlit
+)
+
+# Also log to file with rotation (if possible)
+_log_dir = os.path.join(os.path.dirname(__file__), "logs")
+try:
+    os.makedirs(_log_dir, exist_ok=True)
+    logger.add(
+        os.path.join(_log_dir, "streamlit_app_{time}.log"),
+        rotation="5 MB",
+        retention="3 days",
+        level="DEBUG",
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
+    )
+except (OSError, PermissionError):
+    # File logging not available, continue with console only
+    pass
 
 # Page configuration
 st.set_page_config(
@@ -34,6 +60,7 @@ st.set_page_config(
 @st.cache_data(show_spinner=False)
 def load_data():
     """Fetch all guns and mods from API (cached). Saves to debug file."""
+    logger.info("Loading game data...")
     guns, mods = fetch_all_data()
 
     # Save to debug file
@@ -47,6 +74,7 @@ def load_data():
     with open("api_cache_debug.json", "w", encoding="utf-8") as f:
         json.dump(debug_data, f, indent=2, ensure_ascii=False)
 
+    logger.info(f"Loaded {len(guns)} guns and {len(mods)} mods")
     return guns, mods
 
 
@@ -594,6 +622,8 @@ def generate_build_export(result, item_lookup, weapon_stats, presets, selected_g
 
 
 def main():
+    logger.debug("Streamlit app main() started")
+
     # Language selector at top of sidebar
     with st.sidebar:
         language_selector(label="🌐 Language")
@@ -888,6 +918,7 @@ def main():
         explore_button = st.button(f"📊 {t('explore.explore_btn')}", type="primary", key="explore_btn", width="stretch")
 
         if explore_button:
+            logger.info(f"User started Pareto exploration for {selected_gun_name}")
             with st.status(t("status.exploring"), expanded=True) as status:
                 # Build compatibility map (cached per weapon)
                 try:
@@ -1160,6 +1191,7 @@ def main():
         optimize_button = st.button(f"🚀 {t('optimize.optimize_btn')}", type="primary", key="optimize_btn", width="stretch")
 
         if optimize_button:
+            logger.info(f"User started optimization for {selected_gun_name} (weights: ergo={w_ergo}%, recoil={w_recoil}%, price={w_price}%)")
             with st.status(t("status.optimizing"), expanded=True) as status:
                 # Build compatibility map (cached per weapon)
                 try:
@@ -1314,6 +1346,7 @@ def main():
             st.markdown("---")
             
             if st.button(t("gunsmith.optimize_btn"), type="primary"):
+                logger.info(f"User started Gunsmith task optimization for {selected_task_name}")
                 target_gun_id = None
                 for gun in guns:
                     if gun["name"] == task["weapon_name"]:
