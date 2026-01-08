@@ -1,0 +1,570 @@
+\documentclass[aspectratio=169]{beamer}
+
+% Theme selection
+\usetheme{Madrid}
+\usecolortheme{whale}
+
+% Packages
+\usepackage{graphicx}
+\usepackage{tikz}
+\usetikzlibrary{shapes,arrows,positioning}
+\usepackage{booktabs}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage[fontset=fandol]{ctex}
+
+% Custom colors
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0.82}
+\definecolor{backcolour}{rgb}{0.95,0.95,0.92}
+
+% Code listing style
+\lstdefinestyle{mystyle}{
+    backgroundcolor=\color{backcolour},
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{magenta},
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,
+    breaklines=true,
+    captionpos=b,
+    keepspaces=true,
+    numbers=left,
+    numbersep=5pt,
+    showspaces=false,
+    showstringspaces=false,
+    showtabs=false,
+    tabsize=2
+}
+\lstset{style=mystyle}
+
+\begin{document}
+
+% Title Info
+\title[塔科夫改枪优化器]{塔科夫改枪优化器}
+\subtitle{基于约束规划的自动化配置方案优化}
+\author{Imposs1ble嗨}
+\date{\today}
+
+\begin{frame}
+    \titlepage
+\end{frame}
+
+% Section 1: Introduction
+\section{背景介绍}
+
+% Slide 3: The Problem
+\begin{frame}{问题背景：复杂的武器改装系统}
+    《逃离塔科夫》拥有业界最复杂的武器改装系统之一。
+
+    \vspace{0.3cm}
+    \textbf{玩家面临的主要挑战：}
+    \begin{itemize}
+        \item \textbf{配件数量庞大：}超过2500种配件，涉及后坐力、人机工效、重量、精准度等多项属性
+        \item \textbf{嵌套兼容结构：}配件可安装于其他配件之上（导轨 $\to$ 转接座 $\to$ 瞄具）
+        \item \textbf{组合空间爆炸：}一把AR-15有50余个槽位，有效配置方案多达数万种
+        \item \textbf{性价比难以评估：}高价配件是否物有所值？
+        \item \textbf{购买限制：}价格实时波动，且受商人等级和跳蚤市场解锁条件限制
+    \end{itemize}
+
+    \vspace{0.3cm}
+    \textbf{现状：}玩家需要相当的时间来熟悉各个配件的属性，或直接照搬网上的"版本答案"，而不理解其背后的权衡逻辑或者盲目购买高价配件。
+\end{frame}
+
+% Slide 4: The Solution
+\begin{frame}{解决方案：自动化配置优化}
+    \textbf{项目目标：}
+    在给定约束条件下，自动计算出数学意义上的最优改枪方案。
+
+    \vspace{0.4cm}
+    \begin{columns}
+        \column{0.5\textwidth}
+        \textbf{典型应用场景：}
+        \begin{itemize}
+            \item \textit{"预算20万卢布，如何改出最好的M4？"}
+            \item \textit{"不限预算，AK的后坐力最低能达到多少？"}
+            \item \textit{"当前商人等级下，能改出什么水平的武器？"}
+            \item \textit{"增加10万预算，后坐力提升有多大？"}
+            \item \textit{"不同预算档位下的最优改枪方案分别是什么？"}
+        \end{itemize}
+
+        \column{0.5\textwidth}
+        \textbf{核心功能：}
+        \begin{itemize}
+            \item \textbf{多目标优化：}综合平衡后坐力、人机工效与价格
+            \item \textbf{预算控制：}支持硬性上限或软性惩罚
+            \item \textbf{商人等级过滤：}根据玩家等级筛选可购配件以及商人等级限制
+            \item \textbf{自定义过滤器：}根据玩家需求，自定义过滤器，如必装槽位、必装配件、必装类别等，以及排除某些配件等
+            \item \textbf{帕累托前沿：}忽略一个属性，可视化呈现其他属性之间的权衡曲线
+            \item \textbf{枪匠任务：}自动求解枪匠任务，输出成本最优的改枪方案
+        \end{itemize}
+    \end{columns}
+\end{frame}
+
+% Section 2: Architecture
+\section{系统架构}
+
+% Slide: Pipeline Overview
+\begin{frame}{整体流程}
+    \begin{center}
+    \begin{tikzpicture}[
+        node distance=0.8cm,
+        every node/.style={font=\small},
+        box/.style={draw, rectangle, rounded corners, fill=blue!20, minimum width=2.4cm, minimum height=0.9cm, align=center},
+        arrow/.style={->, thick, >=stealth, line width=1.5pt}
+    ]
+        % Main pipeline - horizontal
+        \node[box] (fetch) {数据获取\\{\scriptsize Tarkov.dev API}};
+        \node[box, right=of fetch] (compat) {构建兼容树\\{\scriptsize BFS遍历}};
+        \node[box, right=of compat] (solve) {求解优化\\{\scriptsize CP-SAT}};
+        \node[box, right=of solve, fill=green!25] (result) {最优方案};
+
+        % User input from below
+        \node[box, below=0.7cm of solve, fill=orange!25] (user) {用户约束};
+
+        % Arrows
+        \draw[arrow] (fetch) -- (compat);
+        \draw[arrow] (compat) -- (solve);
+        \draw[arrow] (solve) -- (result);
+        \draw[arrow] (user) -- (solve);
+    \end{tikzpicture}
+    \end{center}
+\end{frame}
+
+% Slide 5: Fetching Data
+\begin{frame}{数据获取}
+    \begin{columns}
+        \column{0.45\textwidth}
+        \textbf{Tarkov.dev GraphQL API}
+
+        \vspace{0.3cm}
+        \begin{itemize}
+            \item 获取全部武器、配件及兼容性规则
+            \item \textbf{24小时内价格：}包含商人价格与跳蚤市场价格
+            \item 商人等级要求与跳蚤市场解锁条件
+            \item 本地缓存机制提升查询效率
+        \end{itemize}
+
+        \column{0.55\textwidth}
+        \begin{center}
+            \includegraphics[width=\textwidth]{imgs/tarkov_dev.jpg}
+        \end{center}
+    \end{columns}
+\end{frame}
+
+% Slide 6c: BFS Compatibility Tree
+\begin{frame}{构建兼容性树}
+    \begin{columns}
+        \column{0.55\textwidth}
+        \textbf{广度优先搜索（BFS）流程：}
+        \begin{enumerate}
+            \item 从基础武器的槽位出发
+            \item 遍历每个槽位，获取所有可以安装在该槽位的配件
+            \item 将这些配件加入待处理队列
+            \item 继续探索每个配件\textit{自身}拥有的槽位
+            \item 重复上述过程直至无新配件可以安装
+        \end{enumerate}
+
+        \column{0.45\textwidth}
+        \begin{center}
+        \begin{tikzpicture}[
+            node distance=0.6cm,
+            every node/.style={font=\scriptsize},
+            slot/.style={draw, rectangle, rounded corners, fill=blue!15, minimum width=1.6cm, minimum height=0.4cm},
+            item/.style={draw, rectangle, fill=green!15, minimum width=1.4cm, minimum height=0.4cm}
+        ]
+            \node[item] (gun) {M4A1};
+            \node[slot, below left=0.5cm and -0.2cm of gun] (s1) {机匣槽};
+            \node[slot, below right=0.5cm and -0.2cm of gun] (s2) {握把槽};
+            \node[item, below=of s1] (upper) {上机匣};
+            \node[slot, below=of upper] (s3) {枪管槽};
+            \node[item, below=of s3] (barrel) {416mm枪管};
+
+            \draw[->] (gun) -- (s1);
+            \draw[->] (gun) -- (s2);
+            \draw[->] (s1) -- (upper);
+            \draw[->] (upper) -- (s3);
+            \draw[->] (s3) -- (barrel);
+        \end{tikzpicture}
+        \end{center}
+        \textit{\scriptsize 配件拥有槽位，槽位容纳配件}
+    \end{columns}
+\end{frame}
+
+% Section 3: The Engine
+\section{优化引擎}
+
+% Slide 7: What is CP-SAT?
+\begin{frame}{CP-SAT求解器简介}
+    \textbf{CP-SAT} = 约束编程（Constraint Programming）+ 布尔可满足性（SAT）
+
+    \vspace{0.3cm}
+    \begin{block}{核心原理}
+        Google OR-Tools库中的求解器，通过融合以下技术求解组合优化问题：
+        \begin{itemize}
+            \item \textbf{约束编程：}以声明式方式表达复杂规则
+            \item \textbf{SAT求解：}高效的布尔逻辑推理引擎
+            \item \textbf{线性规划：}优化数值目标函数
+        \end{itemize}
+    \end{block}
+
+    \vspace{0.3cm}
+    \textbf{为何适用于本问题？}
+    \begin{itemize}
+        \item 天然支持"选中/不选"的布尔决策建模
+        \item 可处理数千个变量与约束条件
+        \item 保证求得全局最优解，而非近似解
+        \item 典型武器配置问题可在毫秒级完成求解
+    \end{itemize}
+\end{frame}
+
+% % Slide 8: How CP-SAT Works
+% \begin{frame}{CP-SAT工作原理}
+%     \begin{columns}
+%         \column{0.5\textwidth}
+%         \textbf{1. 模型构建}
+%         \begin{itemize}
+%             \item 定义布尔变量：$X_i \in \{0, 1\}$
+%             \item 添加约束条件
+%             \item 设定目标函数
+%         \end{itemize}
+
+%         \vspace{0.3cm}
+%         \textbf{2. 求解过程}
+%         \begin{itemize}
+%             \item 传播：推断确定值
+%             \item 搜索：对未定变量进行分支
+%             \item 回溯：遇到矛盾时返回
+%             \item 剪枝：跳过不可行分支
+%         \end{itemize}
+
+%         \column{0.5\textwidth}
+%         \textbf{3. 关键技术}
+%         \begin{itemize}
+%             \item \textit{单元传播：}约束确定的值立即应用
+%             \item \textit{冲突学习：}记录失败原因以避免重复探索
+%             \item \textit{界收紧：}利用目标值提前剪除次优分支
+%         \end{itemize}
+
+%         \vspace{0.3cm}
+%         \textbf{效果：}高效遍历搜索空间，确保找到全局最优解。
+%     \end{columns}
+% \end{frame}
+
+% Slide 9: Constraint Programming Overview
+\begin{frame}{CP-SAT在武器配置中的应用}
+    \textbf{核心思路：}明确定义合法配置的条件，由求解器自动搜索最优方案。
+
+    \vspace{0.3cm}
+    \begin{block}{模型三要素}
+        \begin{enumerate}
+            \item \textbf{决策变量：}为每个可用配件定义布尔变量$X_i$（$X_i = 1$表示选中）
+            \item \textbf{约束条件：}兼容性规则、预算限制、必装槽位等
+            \item \textbf{目标函数：}最大化人机工效、最小化后坐力或价格
+        \end{enumerate}
+    \end{block}
+
+    \vspace{0.3cm}
+    求解器遍历数百万种配件组合，实时剪除不合法配置，最终返回数学意义上的最优方案。
+\end{frame}
+
+% Slide 8: Constraint 1 - Mutex
+\begin{frame}{约束1：槽位互斥}
+    \textbf{规则：}每个槽位最多安装一个配件。
+
+    \vspace{0.3cm}
+    \begin{block}{数学表达}
+        对于槽位$s$及其候选配件集合$\{i_1, i_2, ..., i_n\}$：
+        \[
+        \sum_{i \in \text{slot}_s} X_i \le 1
+        \]
+        其中$X_i = 1$表示配件$i$被选中，$X_i = 0$表示未选中。
+    \end{block}
+
+    \vspace{0.3cm}
+    \textbf{示例：}M4的握把槽可安装GRAL-S\textit{或}Ergo PSG-1，但二者不可同时安装。
+\end{frame}
+
+% Slide 9: Constraint 2 - Dependency
+\begin{frame}{约束2：父子依赖}
+    \textbf{规则：}子配件的安装必须以父配件已安装为前提。
+
+    \vspace{0.3cm}
+    \begin{block}{数学表达}
+        若配件$c$需安装于配件$p$所拥有的槽位：
+        \[
+        X_c \le X_p
+        \]
+        父配件未选中时，子配件不可选中。
+    \end{block}
+
+    \vspace{0.3cm}
+    \textbf{示例：}安装前握把的前提是护木已安装在武器上，速瞄镜的前提是镜架已安装。
+
+    \vspace{0.2cm}
+    \begin{center}
+    \textit{武器} $\to$ \textit{护木} $\to$ \textit{前握把}
+    \end{center}
+\end{frame}
+
+% Slide 10: Constraint 3 - Conflicts
+\begin{frame}{约束3：配件冲突}
+    \textbf{规则：}部分配件存在互斥关系，不可同时安装。
+
+    \vspace{0.3cm}
+    \begin{block}{数学表达}
+        对于API定义的冲突配件对$(a, b)$：
+        \[
+        X_a + X_b \le 1
+        \]
+        二者最多选其一。
+    \end{block}
+
+    \vspace{0.3cm}
+    \textbf{示例：}AK以及M4的榴弹发射器和一些护木存在冲突，游戏不允许同时安装。
+\end{frame}
+
+% Slide 11: Constraint 4 - Required Slots
+\begin{frame}{约束4：必装槽位}
+    \textbf{规则：}特定槽位\textit{必须}安装配件，武器才可以正常使用。
+
+    \vspace{0.3cm}
+    \begin{block}{数学表达}
+        对于必装槽位$s$：
+        \[
+        \sum_{i \in \text{slot}_s} X_i \ge 1
+        \]
+        该槽位必须安装至少一个兼容配件。
+    \end{block}
+
+    \vspace{0.3cm}
+    \textbf{AR-15平台必装槽位：}
+    \begin{itemize}
+        \item 枪管、导气座、握把、拉机柄、机匣、护木
+    \end{itemize}
+
+    \vspace{0.2cm}
+    缺少任一配件，武器均无法在游戏中正常使用。
+\end{frame}
+
+% Slide 12: Budget Constraint
+\begin{frame}{约束5：预算限制}
+    \textbf{规则：}配置总成本不得超过玩家设定的预算。
+
+    \vspace{0.3cm}
+    \begin{block}{数学表达}
+        \[
+        \sum_{i} \text{Price}_i \cdot X_i \le \text{Budget}
+        \]
+        所有选中配件的价格之和必须在预算范围内。
+    \end{block}
+
+    \vspace{0.3cm}
+    \textbf{价格软约束机制（BFS阶段剪枝）：}
+    \begin{itemize}
+        \item 考虑商人等级（1-4级对应不同解锁价格）
+        \item 对比跳蚤市场价格
+        \item 自动选择每个配件的最低价购买渠道
+    \end{itemize}
+\end{frame}
+
+% Slide 13: Objective Function
+\begin{frame}{目标函数}
+    \begin{block}{加权评分函数（最大化）}
+        \[
+        \text{Score} = W_E \cdot \text{人机} - W_R \cdot \text{后坐力} - W_P \cdot \text{价格}
+        \]
+        \vspace{-0.2cm}
+        \begin{itemize}
+            \item $W_E$：人机工效权重 \quad $W_R$：后坐力权重 \quad $W_P$：价格权重
+        \end{itemize}
+    \end{block}
+
+    \vspace{0.2cm}
+    \textbf{预设配置方案：}
+    \begin{itemize}
+        \item \textit{最高人机：}$W_E = 98\%, W_R = 1\%, W_P = 1\%$
+        \item \textit{最低后坐力：}$W_E = 1\%, W_R = 98\%, W_P = 1\%$
+        \item \textit{最低价格：}$W_E = 1\%, W_R = 1\%, W_P = 98\%$
+        \item \textit{均衡方案：}$W_E = 34\%, W_R = 33\%, W_P = 33\%$
+    \end{itemize}
+\end{frame}
+
+% Slide: UI - Optimizer
+\begin{frame}{用户界面：优化配置}
+    \begin{center}
+        \includegraphics[width=0.9\textwidth]{imgs/page_optimize.png}
+    \end{center}
+\end{frame}
+
+% Slide: Optimization Results - Recoil
+\begin{frame}{优化结果：极限后坐力}
+    \begin{center}
+        \includegraphics[width=0.85\textwidth]{imgs/eg_recoil.png}
+    \end{center}
+\end{frame}
+
+% Slide: Optimization Results - Ergo
+\begin{frame}{优化结果：极限人机}
+    \begin{center}
+        \includegraphics[width=0.85\textwidth]{imgs/eg_ergo.png}
+    \end{center}
+\end{frame}
+
+% Slide: Optimization Results - Balanced
+\begin{frame}{优化结果：均衡方案}
+    \begin{center}
+        \includegraphics[width=0.85\textwidth]{imgs/eg_balanced.png}
+    \end{center}
+\end{frame}
+
+% Slide 14: Stat Calculations
+% \begin{frame}{属性计算规则}
+%     \begin{columns}
+%         \column{0.5\textwidth}
+%         \textbf{人机工效}（加法叠加）：
+%         \[
+%         \text{人机}_{\text{最终}} = \text{人机}_{\text{基础}} + \sum_{i} \text{人机}_i
+%         \]
+%         各配件的人机加成直接累加。
+
+%         \vspace{0.5cm}
+%         \textit{游戏内存在100点软上限。}
+
+%         \column{0.5\textwidth}
+%         \textbf{后坐力}（乘法叠加）：
+%         \[
+%         \text{后坐力}_{\text{最终}} = \text{后坐力}_{\text{基础}} \times \left(1 + \sum_{i} r_i\right)
+%         \]
+%         其中$r_i$为百分比修正值（如$-0.05$表示$-5\%$）。
+
+%         \vspace{0.3cm}
+%         \textit{多个减后坐力配件叠加存在边际递减效应。}
+%     \end{columns}
+% \end{frame}
+
+% Section 4: Features
+\section{特色功能}
+
+% Slide: Gunsmith Task Solver
+\begin{frame}{枪匠任务求解器}
+    \textbf{背景：}枪匠任务要求玩家按照指定规格改装武器，对新手玩家具有一定难度。
+
+    \vspace{0.2cm}
+    \begin{columns}
+        \column{0.5\textwidth}
+        \textbf{任务定义（JSON格式）：}
+        \begin{itemize}
+            \item 指定武器型号
+            \item 属性要求：
+            \begin{itemize}
+                \item 人机工效下限、后坐力上限
+                \item 弹匣容量、重量、瞄准距离等
+            \end{itemize}
+            \item 必须安装的特定配件
+            \item 必须包含的配件类别（如消音器）
+        \end{itemize}
+
+        \column{0.5\textwidth}
+        \textbf{求解流程：}
+        \begin{enumerate}
+            \item 加载任务配置文件
+            \item 将任务要求转化为约束：
+            \item 目标函数：最小化总价格
+            \item 输出成本最低的达标方案
+        \end{enumerate}
+    \end{columns}
+
+    \vspace{0.2cm}
+    \textbf{效果：}可自动求解全部28个枪匠任务，输出成本最优的通关方案。
+\end{frame}
+
+% Slide: Gunsmith List
+\begin{frame}{枪匠任务列表}
+    \begin{center}
+        \includegraphics[width=0.9\textwidth,height=0.75\textheight,keepaspectratio]{imgs/eg_gunsmith.png}
+    \end{center}
+\end{frame}
+
+% Slide: Gunsmith Details
+\begin{frame}{枪匠任务求解详情}
+    \begin{center}
+        \includegraphics[width=0.9\textwidth,height=0.75\textheight,keepaspectratio]{imgs/eg_gunsmith_2.png}
+    \end{center}
+\end{frame}
+
+% Slide 9: Pareto Frontier
+\begin{frame}{帕累托前沿分析}
+    \textbf{概念说明：}
+    \begin{itemize}
+        \item 帕累托前沿展示了两个冲突目标（如后坐力与人机工效）之间的最优权衡曲线。
+    \end{itemize}
+
+    \begin{center}
+    \begin{tikzpicture}[scale=0.85]
+        \draw[->] (0,0) -- (6,0) node[right] {\small 后坐力};
+        \draw[->] (0,0) -- (0,4) node[above] {\small 人机};
+
+        \draw[thick, blue] (0.5, 1) to[out=45, in=180] (2.5, 2.8) to[out=0, in=135] (5, 3.3);
+
+        \node[fill=red, circle, inner sep=2pt, label={[font=\scriptsize]left:低后座}] at (0.5, 1) {};
+        \node[fill=green, circle, inner sep=2pt, label={[font=\scriptsize]below right:均衡}] at (2.5, 2.8) {};
+        \node[fill=red, circle, inner sep=2pt, label={[font=\scriptsize]right:高人机}] at (5, 3.3) {};
+
+        \node[font=\small] at (1.2, 3.5) {不可达};
+        \node[font=\small] at (4.5, 1) {非最优};
+    \end{tikzpicture}
+    \end{center}
+
+    \textbf{应用价值}：帮助玩家直观判断后坐力与人机工效之间的权衡，选择最适合自己的配置方案。
+\end{frame}
+
+% Slide: Pareto Visualization
+\begin{frame}{帕累托前沿可视化}
+    \begin{center}
+        \includegraphics[width=0.9\textwidth,height=0.75\textheight,keepaspectratio]{imgs/page_pareto.png}
+    \end{center}
+\end{frame}
+
+% Slide: Future Work
+\begin{frame}{尚未实现的功能}
+    \begin{itemize}
+        \item \textbf{武器隐藏属性}：目前无法获取武器的隐藏属性，如后坐力角度等
+        \item \textbf{商人以物易物}：目前无法获取商人以物易物的物品列表，以及商人以物易物的价格
+    \end{itemize}
+\end{frame}
+
+% Section 5: Conclusion
+\section{总结}
+
+% Acknowledgements
+\begin{frame}{致谢}
+    \begin{center}
+        \textbf{\Large 数据来源}
+
+        \vspace{0.2cm}
+        \includegraphics[height=0.9cm]{logos/tarkov-dev-logo.png}
+
+        \vspace{0.1cm}
+        社区开源GraphQL API
+
+        \vspace{0.4cm}
+        \textbf{\Large AI编程助手}
+
+        \vspace{0.3cm}
+        \begin{tabular}{c @{\hspace{1cm}} c @{\hspace{1cm}} c}
+            \includegraphics[height=1.1cm]{logos/claude-color.png} &
+            \includegraphics[height=1.1cm]{logos/gemini-color.png} &
+            \includegraphics[height=1.1cm]{logos/minimax-color.png} \\[0.2cm]
+            \textbf{Claude Code} & \textbf{Gemini CLI} & \textbf{MiniMax} \\[0.1cm]
+            Anthropic & Google & MiniMax \\
+        \end{tabular}
+
+        \vspace{0.3cm}
+        \textit{感谢以上AI助手在代码编写、调试及文档撰写方面提供的支持}
+    \end{center}
+\end{frame}
+
+\end{document}

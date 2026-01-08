@@ -156,50 +156,50 @@
 \end{frame}
 
 % Slide 6a: Data Processing Pipeline
-\begin{frame}{Data Processing: From API to Item Lookup}
-    \textbf{Step 1: Raw API Data Normalization}
+% \begin{frame}{Data Processing: From API to Item Lookup}
+%     \textbf{Step 1: Raw API Data Normalization}
 
-    \vspace{0.2cm}
-    \begin{columns}
-        \column{0.5\textwidth}
-        \textbf{Slot Extraction Challenges:}
-        \begin{itemize}
-            \item Guns and mods have different property structures
-            \item \texttt{filters.allowedItems} can be:
-            \begin{itemize}
-                \item List of objects: \texttt{[\{"id": "abc"\}]}
-                \item List of strings: \texttt{["abc", "def"]}
-            \end{itemize}
-            \item Must normalize to flat list of IDs
-        \end{itemize}
+%     \vspace{0.2cm}
+%     \begin{columns}
+%         \column{0.5\textwidth}
+%         \textbf{Slot Extraction Challenges:}
+%         \begin{itemize}
+%             \item Guns and mods have different property structures
+%             \item \texttt{filters.allowedItems} can be:
+%             \begin{itemize}
+%                 \item List of objects: \texttt{[\{"id": "abc"\}]}
+%                 \item List of strings: \texttt{["abc", "def"]}
+%             \end{itemize}
+%             \item Must normalize to flat list of IDs
+%         \end{itemize}
 
-        \vspace{0.3cm}
-        \textbf{Price Validation:}
-        \begin{itemize}
-            \item Mods without valid \texttt{buyFor} offers are filtered out
-            \item Prevents selecting items that can't actually be purchased
-        \end{itemize}
+%         \vspace{0.3cm}
+%         \textbf{Price Validation:}
+%         \begin{itemize}
+%             \item Mods without valid \texttt{buyFor} offers are filtered out
+%             \item Prevents selecting items that can't actually be purchased
+%         \end{itemize}
 
-        \column{0.5\textwidth}
-        \textbf{Stat Normalization:}
-        \begin{itemize}
-            \item \textbf{Recoil modifier} formats differ:
-            \begin{itemize}
-                \item Top-level: integer \% (e.g., \texttt{-5})
-                \item Properties: decimal (e.g., \texttt{-0.05})
-            \end{itemize}
-            \item Normalize all to decimal format
-            \item Handle null/missing values gracefully
-        \end{itemize}
+%         \column{0.5\textwidth}
+%         \textbf{Stat Normalization:}
+%         \begin{itemize}
+%             \item \textbf{Recoil modifier} formats differ:
+%             \begin{itemize}
+%                 \item Top-level: integer \% (e.g., \texttt{-5})
+%                 \item Properties: decimal (e.g., \texttt{-0.05})
+%             \end{itemize}
+%             \item Normalize all to decimal format
+%             \item Handle null/missing values gracefully
+%         \end{itemize}
 
-        \vspace{0.3cm}
-        \textbf{Conflict Extraction:}
-        \begin{itemize}
-            \item \texttt{conflictingItems}: Items that can't coexist
-            \item \texttt{conflictingSlotIds}: Slots blocked by this item
-        \end{itemize}
-    \end{columns}
-\end{frame}
+%         \vspace{0.3cm}
+%         \textbf{Conflict Extraction:}
+%         \begin{itemize}
+%             \item \texttt{conflictingItems}: Items that can't coexist
+%             \item \texttt{conflictingSlotIds}: Slots blocked by this item
+%         \end{itemize}
+%     \end{columns}
+% \end{frame}
 
 % Slide 6c: BFS Compatibility Tree
 \begin{frame}{Building the Compatibility Tree}
@@ -276,37 +276,37 @@
 \end{frame}
 
 % Slide 8: How CP-SAT Works
-\begin{frame}{How CP-SAT Works}
-    \begin{columns}
-        \column{0.5\textwidth}
-        \textbf{1. Model Definition}
-        \begin{itemize}
-            \item Create Boolean variables: $X_i \in \{0, 1\}$
-            \item Add constraints (rules)
-            \item Define objective function
-        \end{itemize}
+% \begin{frame}{How CP-SAT Works}
+%     \begin{columns}
+%         \column{0.5\textwidth}
+%         \textbf{1. Model Definition}
+%         \begin{itemize}
+%             \item Create Boolean variables: $X_i \in \{0, 1\}$
+%             \item Add constraints (rules)
+%             \item Define objective function
+%         \end{itemize}
 
-        \vspace{0.3cm}
-        \textbf{2. Solving Process}
-        \begin{itemize}
-            \item Propagation: Infer forced values
-            \item Search: Branch on undecided variables
-            \item Backtrack: Undo bad decisions
-            \item Prune: Skip impossible branches
-        \end{itemize}
+%         \vspace{0.3cm}
+%         \textbf{2. Solving Process}
+%         \begin{itemize}
+%             \item Propagation: Infer forced values
+%             \item Search: Branch on undecided variables
+%             \item Backtrack: Undo bad decisions
+%             \item Prune: Skip impossible branches
+%         \end{itemize}
 
-        \column{0.5\textwidth}
-        \textbf{3. Key Techniques}
-        \begin{itemize}
-            \item \textit{Unit Propagation}: If a constraint forces a value, apply it immediately
-            \item \textit{Conflict Learning}: Remember why branches failed to avoid repeating mistakes
-            \item \textit{Bound Tightening}: Use objective to prune suboptimal branches early
-        \end{itemize}
+%         \column{0.5\textwidth}
+%         \textbf{3. Key Techniques}
+%         \begin{itemize}
+%             \item \textit{Unit Propagation}: If a constraint forces a value, apply it immediately
+%             \item \textit{Conflict Learning}: Remember why branches failed to avoid repeating mistakes
+%             \item \textit{Bound Tightening}: Use objective to prune suboptimal branches early
+%         \end{itemize}
 
-        \vspace{0.3cm}
-        \textbf{Result}: Explores the search space efficiently, proving optimality.
-    \end{columns}
-\end{frame}
+%         \vspace{0.3cm}
+%         \textbf{Result}: Explores the search space efficiently, proving optimality.
+%     \end{columns}
+% \end{frame}
 
 % Slide 9: Constraint Programming Overview
 \begin{frame}{Applying CP-SAT to Weapon Builds}
@@ -449,30 +449,58 @@
     \end{itemize}
 \end{frame}
 
-% Slide 14: Stat Calculations
-\begin{frame}{How Stats Are Calculated}
-    \begin{columns}
-        \column{0.5\textwidth}
-        \textbf{Ergonomics} (Additive):
-        \[
-        \text{Ergo}_{\text{final}} = \text{Ergo}_{\text{base}} + \sum_{i} \text{Ergo}_i
-        \]
-        Simply add up all mod bonuses.
-
-        \vspace{0.5cm}
-        \textit{Soft-capped at 100 in-game.}
-
-        \column{0.5\textwidth}
-        \textbf{Recoil} (Multiplicative):
-        \[
-        \text{Recoil}_{\text{final}} = \text{Recoil}_{\text{base}} \times \left(1 + \sum_{i} r_i\right)
-        \]
-        Where $r_i$ is the percentage modifier (e.g., $-0.05 = -5\%$).
-
-        \vspace{0.3cm}
-        \textit{Stacking suppressors gives diminishing returns.}
-    \end{columns}
+% Slide: UI - Optimizer
+\begin{frame}{User Interface: Build Optimization}
+    \begin{center}
+        \includegraphics[width=0.9\textwidth]{imgs/page_optimize.png}
+    \end{center}
 \end{frame}
+
+% Slide: Optimization Results - Recoil
+\begin{frame}{Optimization Results: Min Recoil}
+    \begin{center}
+        \includegraphics[width=0.85\textwidth]{imgs/eg_recoil.png}
+    \end{center}
+\end{frame}
+
+% Slide: Optimization Results - Ergo
+\begin{frame}{Optimization Results: Max Ergo}
+    \begin{center}
+        \includegraphics[width=0.85\textwidth]{imgs/eg_ergo.png}
+    \end{center}
+\end{frame}
+
+% Slide: Optimization Results - Balanced
+\begin{frame}{Optimization Results: Balanced Build}
+    \begin{center}
+        \includegraphics[width=0.85\textwidth]{imgs/eg_balanced.png}
+    \end{center}
+\end{frame}
+
+% Slide 14: Stat Calculations
+% \begin{frame}{How Stats Are Calculated}
+%     \begin{columns}
+%         \column{0.5\textwidth}
+%         \textbf{Ergonomics} (Additive):
+%         \[
+%         \text{Ergo}_{\text{final}} = \text{Ergo}_{\text{base}} + \sum_{i} \text{Ergo}_i
+%         \]
+%         Simply add up all mod bonuses.
+
+%         \vspace{0.5cm}
+%         \textit{Soft-capped at 100 in-game.}
+
+%         \column{0.5\textwidth}
+%         \textbf{Recoil} (Multiplicative):
+%         \[
+%         \text{Recoil}_{\text{final}} = \text{Recoil}_{\text{base}} \times \left(1 + \sum_{i} r_i\right)
+%         \]
+%         Where $r_i$ is the percentage modifier (e.g., $-0.05 = -5\%$).
+
+%         \vspace{0.3cm}
+%         \textit{Stacking suppressors gives diminishing returns.}
+%     \end{columns}
+% \end{frame}
 
 % Section 4: Features
 \section{Key Features}
@@ -516,6 +544,20 @@
     \textbf{Result:} Automatically solves all 25 Gunsmith quests with optimal (cheapest) builds.
 \end{frame}
 
+% Slide: Gunsmith List
+\begin{frame}{Gunsmith Task List}
+    \begin{center}
+        \includegraphics[width=0.9\textwidth,height=0.75\textheight,keepaspectratio]{imgs/eg_gunsmith.png}
+    \end{center}
+\end{frame}
+
+% Slide: Gunsmith Details
+\begin{frame}{Gunsmith Solution Details}
+    \begin{center}
+        \includegraphics[width=0.9\textwidth,height=0.75\textheight,keepaspectratio]{imgs/eg_gunsmith_2.png}
+    \end{center}
+\end{frame}
+
 % Slide 9: Pareto Frontier
 \begin{frame}{Pareto Frontier Analysis}
     \textbf{What is it?}
@@ -542,6 +584,21 @@
     \textbf{Why use it?} Allows users to see if spending an extra 50k Roubles actually gives a significant benefit.
 \end{frame}
 
+% Slide: Pareto Visualization
+\begin{frame}{Pareto Frontier Visualization}
+    \begin{center}
+        \includegraphics[width=0.9\textwidth,height=0.75\textheight,keepaspectratio]{imgs/page_pareto.png}
+    \end{center}
+\end{frame}
+
+% Slide: Future Work
+\begin{frame}{Future Work & Unimplemented Features}
+    \begin{itemize}
+        \item \textbf{Hidden Weapon Stats}: Currently unable to retrieve hidden weapon stats, such as recoil angle.
+        \item \textbf{Trader Barters}: Currently unable to retrieve trader barter items and their calculated prices.
+    \end{itemize}
+\end{frame}
+
 % Section 5: Conclusion
 \section{Conclusion}
 
@@ -550,25 +607,25 @@
     \begin{center}
         \textbf{\Large Data Source}
 
-        \vspace{0.3cm}
-        \includegraphics[height=1cm]{logos/tarkov-dev-logo.png}
-
         \vspace{0.2cm}
+        \includegraphics[height=0.9cm]{logos/tarkov-dev-logo.png}
+
+        \vspace{0.1cm}
         Open-source GraphQL API for Escape from Tarkov
 
-        \vspace{0.6cm}
+        \vspace{0.4cm}
         \textbf{\Large AI Coding Assistants}
 
-        \vspace{0.4cm}
+        \vspace{0.3cm}
         \begin{tabular}{c @{\hspace{1cm}} c @{\hspace{1cm}} c}
-            \includegraphics[height=1.2cm]{logos/claude-color.png} &
-            \includegraphics[height=1.2cm]{logos/gemini-color.png} &
-            \includegraphics[height=1.2cm]{logos/minimax-color.png} \\[0.3cm]
+            \includegraphics[height=1.1cm]{logos/claude-color.png} &
+            \includegraphics[height=1.1cm]{logos/gemini-color.png} &
+            \includegraphics[height=1.1cm]{logos/minimax-color.png} \\[0.2cm]
             \textbf{Claude Code} & \textbf{Gemini CLI} & \textbf{MiniMax} \\[0.1cm]
             Anthropic & Google & MiniMax \\
         \end{tabular}
 
-        \vspace{0.5cm}
+        \vspace{0.3cm}
         \textit{All the AI assistants helped me with code generation, debugging, and documentation}
     \end{center}
 \end{frame}
