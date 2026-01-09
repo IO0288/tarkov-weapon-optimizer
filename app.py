@@ -352,7 +352,15 @@ def display_optimization_results(result, item_lookup, weapon_stats, presets, sel
         weapon_base_price = 0
 
     if selected_preset:
+        # Check for fallback preset (not purchasable, price=0)
+        fallback_base = result.get("fallback_base")
         preset_info_temp = next((p for p in presets if p.get("id") == selected_preset), None)
+
+        # If not found in purchasable presets, check all_presets (for fallback case)
+        if not preset_info_temp:
+            all_presets = item_lookup[selected_gun["id"]].get("all_presets", [])
+            preset_info_temp = next((p for p in all_presets if p.get("id") == selected_preset), None)
+
         if preset_info_temp:
             preset_items_temp = set(preset_info_temp.get("items", []))
             individual_cost = sum([
@@ -360,8 +368,10 @@ def display_optimization_results(result, item_lookup, weapon_stats, presets, sel
                 for item_id in selected_items
                 if item_id not in preset_items_temp and item_id in item_lookup
             ])
-            total_cost = preset_info_temp.get("price", 0) + individual_cost
-            cost_composition = f"{t('results.preset')}: ₽{preset_info_temp.get('price', 0):,} + {t('results.additional_mods')}: ₽{individual_cost:,}"
+            # Use price=0 if this is a fallback preset
+            preset_price = 0 if (fallback_base and fallback_base.get("type") == "preset") else preset_info_temp.get("price", 0)
+            total_cost = preset_price + individual_cost
+            cost_composition = f"{t('results.preset')}: ₽{preset_price:,} + {t('results.additional_mods')}: ₽{individual_cost:,}"
             delta_val = individual_cost
     else:
         total_cost = weapon_base_price + final_stats['total_price']
@@ -384,16 +394,26 @@ def display_optimization_results(result, item_lookup, weapon_stats, presets, sel
     # Get preset info and items if preset was selected
     preset_info = None
     preset_item_ids = set()
+    fallback_base = result.get("fallback_base")
     if selected_preset:
         preset_info = next((p for p in presets if p.get("id") == selected_preset), None)
+        # If not found in purchasable presets, check all_presets (for fallback case)
+        if not preset_info:
+            all_presets = item_lookup[selected_gun["id"]].get("all_presets", [])
+            preset_info = next((p for p in all_presets if p.get("id") == selected_preset), None)
         if preset_info:
             preset_item_ids = set(preset_info.get("items", []))
 
     if selected_preset and preset_info:
+        # Check if this is a fallback preset (price=0)
+        is_fallback = fallback_base and fallback_base.get("type") == "preset"
+        display_price = 0 if is_fallback else preset_info.get('price', 0)
+        price_source = "fallback (free)" if is_fallback else preset_info.get('price_source', 'market')
+
         st.markdown(f"**{t('results.preset')}:** {preset_info.get('name')}")
         col1, col2 = st.columns([3, 1])
         with col1:
-            st.markdown(f"**{t('results.bundle_price')}:** ₽{preset_info.get('price', 0):,} ({preset_info.get('price_source', 'market')})")
+            st.markdown(f"**{t('results.bundle_price')}:** ₽{display_price:,} ({price_source})")
             st.markdown(f"**{t('results.includes')}:** {len(preset_item_ids)} items")
         with col2:
             if preset_info.get("image"):
@@ -417,7 +437,11 @@ def display_optimization_results(result, item_lookup, weapon_stats, presets, sel
             weapon_price = weapon_stats.get('price', 0)
             weapon_source = weapon_stats.get('price_source', 'market')
 
-            if weapon_source == "not_available":
+            # Check if this is a fallback naked gun (price=0)
+            is_naked_fallback = fallback_base and fallback_base.get("type") == "naked"
+            if is_naked_fallback:
+                st.markdown(f"**{t('sidebar.price')}:** ₽0 (fallback - free)")
+            elif weapon_source == "not_available":
                 st.markdown(f"**{t('sidebar.price')}:** {t('results.not_available')}")
             else:
                 st.markdown(f"**{t('sidebar.price')}:** ₽{weapon_price:,} ({weapon_source})")
@@ -438,7 +462,11 @@ def display_optimization_results(result, item_lookup, weapon_stats, presets, sel
             weapon_price = weapon_stats.get('price', 0)
             weapon_source = weapon_stats.get('price_source', 'market')
 
-            if weapon_source == "not_available":
+            # Check if this is a fallback naked gun (price=0)
+            is_naked_fallback = fallback_base and fallback_base.get("type") == "naked"
+            if is_naked_fallback:
+                st.markdown(f"**{t('sidebar.price')}:** ₽0 (fallback - free)")
+            elif weapon_source == "not_available":
                 st.markdown(f"**{t('sidebar.price')}:** {t('results.not_available')}")
             else:
                 st.markdown(f"**{t('sidebar.price')}:** ₽{weapon_price:,} ({weapon_source})")
@@ -486,20 +514,26 @@ def generate_build_export(result, item_lookup, weapon_stats, presets, selected_g
     """Generate exportable build data in JSON and Markdown formats."""
     selected_items = result["selected_items"]
     selected_preset = result.get("selected_preset")
+    fallback_base = result.get("fallback_base")
     final_stats = calculate_total_stats(weapon_stats, selected_items, item_lookup)
 
     # Calculate total cost
     total_cost = final_stats['total_price']
     weapon_base_price = weapon_stats.get("price", 0)
-    
+
     # Check if dummy price (unavailable)
     if weapon_base_price > 100_000_000:
         weapon_base_price = 0
-        
+
     preset_info = None
 
     if selected_preset:
         preset_info = next((p for p in presets if p.get("id") == selected_preset), None)
+        # If not found in purchasable presets, check all_presets (for fallback case)
+        if not preset_info:
+            weapon_id = selected_gun["id"]
+            all_presets = item_lookup[weapon_id].get("all_presets", [])
+            preset_info = next((p for p in all_presets if p.get("id") == selected_preset), None)
         if preset_info:
             preset_items = set(preset_info.get("items", []))
             individual_cost = sum([
@@ -507,11 +541,18 @@ def generate_build_export(result, item_lookup, weapon_stats, presets, selected_g
                 for item_id in selected_items
                 if item_id not in preset_items and item_id in item_lookup
             ])
-            total_cost = preset_info.get("price", 0) + individual_cost
+            # Use price=0 if this is a fallback preset
+            preset_price = 0 if (fallback_base and fallback_base.get("type") == "preset") else preset_info.get("price", 0)
+            total_cost = preset_price + individual_cost
     else:
         total_cost = weapon_base_price + final_stats['total_price']
 
     # Build JSON export
+    # Use fallback price=0 if applicable
+    export_preset_price = None
+    if preset_info:
+        export_preset_price = 0 if (fallback_base and fallback_base.get("type") == "preset") else preset_info.get("price")
+
     json_data = {
         "exported_at": datetime.now().isoformat(),
         "weapon": {
@@ -522,7 +563,8 @@ def generate_build_export(result, item_lookup, weapon_stats, presets, selected_g
         "preset": {
             "id": preset_info["id"] if preset_info else None,
             "name": preset_info["name"] if preset_info else None,
-            "price": preset_info["price"] if preset_info else None,
+            "price": export_preset_price,
+            "is_fallback": bool(fallback_base and fallback_base.get("type") == "preset"),
         } if selected_preset else None,
         "mods": [
             {
@@ -564,9 +606,11 @@ def generate_build_export(result, item_lookup, weapon_stats, presets, selected_g
     ]
 
     if selected_preset and preset_info:
+        md_preset_price = 0 if (fallback_base and fallback_base.get("type") == "preset") else preset_info.get('price', 0)
+        fallback_note = " (fallback - free)" if (fallback_base and fallback_base.get("type") == "preset") else ""
         md_lines.extend([
             "## Base Preset",
-            f"**{preset_info['name']}** - ₽{preset_info['price']:,}",
+            f"**{preset_info['name']}** - ₽{md_preset_price:,}{fallback_note}",
             "",
         ])
 

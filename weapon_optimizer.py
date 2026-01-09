@@ -74,7 +74,7 @@ def set_log_level(level: str):
 API_URL = "https://api.tarkov.dev/graphql"
 CACHE_DIR = os.path.join(os.path.dirname(__file__), ".cache")
 CACHE_TTL = 3600  # 1 hour in seconds
-CACHE_VERSION = 5  # Increment when data format changes
+CACHE_VERSION = 6  # Increment when data format changes
 
 
 def _get_cache_path(query, variables):
@@ -208,7 +208,8 @@ def build_item_lookup(guns, mods):
             "data": gun,
             "slots": extract_slots(gun),
             "stats": extract_gun_stats(gun),
-            "presets": extract_all_presets(gun),  # List of all presets
+            "presets": extract_all_presets(gun),  # List of purchasable presets
+            "all_presets": extract_all_presets(gun, include_unpurchasable=True),  # All presets for fallback
         }
 
     # Add mods (only those with valid prices)
@@ -294,17 +295,22 @@ def extract_slots_from_mod(mod):
     return slots
 
 
-def extract_all_presets(gun):
+def extract_all_presets(gun, include_unpurchasable=False):
     """Extract all preset information from a gun.
 
-    Returns a list of PURCHASABLE presets (price > 0), each containing:
+    Returns a list of presets, each containing:
     - id: preset identifier
     - name: preset display name
     - items: list of item IDs in this preset
     - image: preset image URL
-    - price: lowest price (legacy/default)
+    - price: lowest price (0 if not purchasable)
     - price_source: lowest price source
     - offers: list of all offers with trader level info
+    - purchasable: whether this preset can be bought (price > 0)
+
+    Args:
+        gun: Gun data from API
+        include_unpurchasable: If True, include presets with no purchase offers
     """
     props = gun.get("properties", {}) or {}
     presets_data = props.get("presets", []) or []
@@ -342,14 +348,14 @@ def extract_all_presets(gun):
             if not isinstance(offer, dict): continue
             price = offer.get("priceRUB") or 0
             if price <= 0: continue
-            
+
             source = offer.get("source", "")
             vendor = offer.get("vendor", {}) or {}
-            
+
             trader_level = None
             if source != "fleaMarket":
                 trader_level = vendor.get("minTraderLevel") or 1
-            
+
             offers.append({
                 "price": price,
                 "source": source,
@@ -357,19 +363,20 @@ def extract_all_presets(gun):
                 "vendor_normalized": vendor.get("normalizedName", ""),
                 "trader_level": trader_level,
             })
-        
+
         offers.sort(key=lambda x: x["price"])
 
         lowest_price = 0
-        price_source = "basePrice"
-        
+        price_source = "not_available"
+
         if offers:
             lowest_price = offers[0]["price"]
             price_source = offers[0]["source"]
 
-        # Only include presets that can actually be purchased (price > 0)
-        # Note: We intentionally do NOT fall back to basePrice - only real market prices
-        if lowest_price > 0:
+        purchasable = lowest_price > 0
+
+        # Include preset if purchasable OR if we want all presets
+        if purchasable or include_unpurchasable:
             presets.append(
                 {
                     "id": preset.get("id", ""),
@@ -379,6 +386,7 @@ def extract_all_presets(gun):
                     "price": lowest_price,
                     "price_source": price_source,
                     "offers": offers,
+                    "purchasable": purchasable,
                 }
             )
 
@@ -1251,6 +1259,7 @@ def optimize_weapon(
     base_vars = {}
     naked_gun_price_raw = weapon["stats"].get("price", 0)
     naked_gun_purchasable = naked_gun_price_raw < 100_000_000
+    fallback_base = None  # Track if we're using a fallback base with price=0
 
     if naked_gun_purchasable:
         base_vars["naked"] = model.NewBoolVar("base_naked")
@@ -1262,14 +1271,48 @@ def optimize_weapon(
     if base_vars:
         model.Add(sum(base_vars.values()) == 1)
     else:
-        # No purchasable base - infeasible
-        logger.warning("No purchasable base (naked gun or preset) available")
-        return {
-            "status": "infeasible",
-            "selected_items": [],
-            "selected_preset": None,
-            "objective_value": 0,
-        }
+        # No purchasable base - use fallback with price=0
+        # Priority: default preset (first in all_presets) > naked gun
+        logger.warning("No purchasable base (naked gun or preset) available, using fallback with price=0")
+
+        all_presets = weapon.get("all_presets", [])
+        if all_presets:
+            # Use the first preset (typically the default) as fallback with price=0
+            fallback_preset = all_presets[0]
+            fallback_preset_id = fallback_preset.get("id", "fallback_preset_0")
+            logger.info(f"Using fallback preset: {fallback_preset.get('name', 'Unknown')} with price=0")
+
+            base_vars[fallback_preset_id] = model.NewBoolVar(f"base_{fallback_preset_id}")
+            model.Add(base_vars[fallback_preset_id] == 1)  # Force selection
+
+            # Add fallback preset items to preset_items_map and item_to_presets
+            fallback_items = set(fallback_preset.get("items", []))
+            preset_items_map[fallback_preset_id] = fallback_items
+            preset_prices_map[fallback_preset_id] = 0  # Price is 0 for fallback
+            for item_id in fallback_items:
+                if item_id not in item_to_presets:
+                    item_to_presets[item_id] = []
+                item_to_presets[item_id].append(fallback_preset_id)
+                # Also ensure these items are in available_items
+                if item_id in reachable and item_id not in available_items:
+                    available_items[item_id] = reachable[item_id]
+                    item_prices[item_id] = (0, "fallback_preset", False)
+
+            fallback_base = {
+                "type": "preset",
+                "id": fallback_preset_id,
+                "name": fallback_preset.get("name", "Unknown"),
+                "price": 0,
+            }
+        else:
+            # No presets at all - use naked gun as fallback with price=0
+            logger.info("No presets available, using naked gun with price=0")
+            base_vars["naked"] = model.NewBoolVar("base_naked")
+            model.Add(base_vars["naked"] == 1)  # Force selection
+            fallback_base = {
+                "type": "naked",
+                "price": 0,
+            }
 
     # Create x[i] = "item i is in the build" variables
     x = {}  # item_id -> BoolVar
@@ -1513,7 +1556,11 @@ def optimize_weapon(
         terms = []
 
         # 1. Base cost (naked gun or preset)
-        naked_gun_price = int(weapon["stats"].get("price", 0))
+        # Use fallback price=0 if we're in fallback mode
+        if fallback_base and fallback_base["type"] == "naked":
+            naked_gun_price = 0  # Fallback naked gun has price=0
+        else:
+            naked_gun_price = int(weapon["stats"].get("price", 0))
         if "naked" in base_vars:
             terms.append(naked_gun_price * base_vars["naked"])
 
@@ -1682,7 +1729,11 @@ def optimize_weapon(
     # Uses the new model: base cost + buy[i] for individual items
     if price_weight > 0:
         # Base cost (naked gun or preset)
-        naked_gun_price = int(weapon["stats"].get("price", 0))
+        # Use fallback price=0 if we're in fallback mode
+        if fallback_base and fallback_base["type"] == "naked":
+            naked_gun_price = 0  # Fallback naked gun has price=0
+        else:
+            naked_gun_price = int(weapon["stats"].get("price", 0))
         if "naked" in base_vars:
             objective_terms.append(int(-price_weight * naked_gun_price) * base_vars["naked"])
 
@@ -1734,10 +1785,13 @@ def optimize_weapon(
         logger.info(f"Optimization {status_str}: selected {len(selected)} mods, objective={solver.ObjectiveValue():.0f}")
         if selected_preset:
             logger.debug(f"Selected preset: {selected_preset}")
+        if fallback_base:
+            logger.info(f"Using fallback base with price=0: {fallback_base}")
         return {
             "status": status_str,
             "selected_items": selected,
             "selected_preset": selected_preset,
+            "fallback_base": fallback_base,  # Info about fallback base if used (price=0)
             "objective_value": solver.ObjectiveValue(),
         }
     else:
