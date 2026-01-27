@@ -2,10 +2,10 @@
 GraphQL queries for the Tarkov.dev API.
 """
 
-# Query to fetch all guns with their slots
+# Query to fetch all guns with their slots (with language support)
 GUNS_QUERY = """
-query AllGuns {
-  itemsByType(type: gun) {
+query AllGuns($lang: LanguageCode) {
+  items(gameMode: regular, lang: $lang, types: gun) {
     id
     basePrice
     avg24hPrice
@@ -127,11 +127,10 @@ query AllGuns {
 }
 """
 
-# Query to fetch all mods with their slots (for nested attachments)
-# Note: Properties vary by mod type, so we query multiple fragment types
+# Query to fetch all mods with their slots (with language support)
 MODS_QUERY = """
-query AllMods {
-  itemsByType(type: mods) {
+query AllMods($lang: LanguageCode) {
+  items(gameMode: regular, lang: $lang, types: mods) {
     id
     basePrice
     avg24hPrice
@@ -230,28 +229,6 @@ query AllMods {
       id
       name
     }
-  }
-}
-"""
-
-# Query to fetch translations for all items
-TRANSLATIONS_QUERY = """
-query MyQuery($lang: LanguageCode) {
-  items(lang: $lang) {
-    id
-    name
-    shortName
-  }
-}
-"""
-
-# Query to fetch translated category names
-CATEGORIES_QUERY = """
-query transCategories($lang: LanguageCode) {
-  itemCategories(lang: $lang) {
-    id
-    name
-    normalizedName
   }
 }
 """
