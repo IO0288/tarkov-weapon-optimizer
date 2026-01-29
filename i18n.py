@@ -41,7 +41,7 @@ LANGUAGES = {
     "zh": "中文",
 }
 
-DEFAULT_LANGUAGE = "en"
+DEFAULT_LANGUAGE = "zh"
 
 # Handle PyInstaller bundle paths
 if getattr(sys, 'frozen', False):

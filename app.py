@@ -673,7 +673,7 @@ def generate_build_export(result, item_lookup, weapon_stats, presets, selected_g
 def get_game_mode() -> str:
     """Get current game mode from session state."""
     if "game_mode" not in st.session_state:
-        st.session_state.game_mode = "regular"
+        st.session_state.game_mode = "pve" #"regular"
     return st.session_state.game_mode
 
 
