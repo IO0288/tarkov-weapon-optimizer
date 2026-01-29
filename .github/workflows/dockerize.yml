@@ -49,7 +49,9 @@ jobs:
           file: ./docker/Dockerfile
           push: true
           # tags: ${{ steps.meta.outputs.tags }} # 使用上一步生成的标签
-          tags: ${{ env.IMAGE_TAG }} # 使用上一步生成的标签
+          tags: |
+            ${{ env.IMAGE_TAG }}
+            ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
       - name: Image digest
