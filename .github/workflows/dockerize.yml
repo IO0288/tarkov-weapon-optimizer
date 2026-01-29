@@ -8,10 +8,6 @@ on:
         required: false
         default: 'latest'
 
-permissions:
-  contents: read
-  packages: write
-
 # 设置环境变量和作业权限
 env:
   REGISTRY: ghcr.io
@@ -21,6 +17,13 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v5
