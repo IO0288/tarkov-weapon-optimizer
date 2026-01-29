@@ -1,5 +1,4 @@
-# 使用 Python 3.10 作为基础镜像
-FROM python:3.10-slim
+FROM python:3.11-slim AS base
 
 # 设置工作目录
 WORKDIR /app
@@ -13,6 +12,7 @@ RUN apt-get update && apt-get install -y \
 
 RUN git clone --depth 1 https://github.com/AhaiMk01/tarkov-weapon-optimizer.git
 
+FROM base AS depend
 WORKDIR /app/tarkov-weapon-optimizer
 
 # 安装 Python 依赖

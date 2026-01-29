@@ -1,4 +1,4 @@
-# !/bin/bash
+#!/bin/bash
 
 # 构建 Docker 镜像
 docker build -t tarkov-weapon-optimizer:latest .
