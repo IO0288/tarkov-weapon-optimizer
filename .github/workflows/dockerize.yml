@@ -16,6 +16,7 @@ permissions:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }} # 自动使用仓库名作为镜像名
+  IMAGE_TAG: ${{ github.event.inputs.image_tag }}
 
 jobs:
   build-and-push:
@@ -47,7 +48,8 @@ jobs:
           context: .
           file: ./docker/Dockerfile
           push: true
-          tags: ${{ steps.meta.outputs.tags }} # 使用上一步生成的标签
+          # tags: ${{ steps.meta.outputs.tags }} # 使用上一步生成的标签
+          tags: ${{ env.IMAGE_TAG }} # 使用上一步生成的标签
           labels: ${{ steps.meta.outputs.labels }}
 
       - name: Image digest
